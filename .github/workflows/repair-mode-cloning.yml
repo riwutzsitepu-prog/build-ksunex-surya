@@ -1,0 +1,51 @@
+name: Repair MODE_CLONING donor workflow
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/repair-mode-cloning.yml'
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Repair only current donor workflow failure
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/mode-cloning-donor-repro-12701.yml')
+          s = p.read_text()
+          start = s.index('          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"', s.index('- name: Configure exact donor defconfig'))
+          end = s.index('          cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"', start)
+          end += len('          cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"')
+          replacement = '''          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          # Public tree has two integer CPU-mask prompts absent from the frozen donor defconfig.
+          # Add defaults to runtime Kconfig only; never add these symbols to donor defconfig.
+          python3 - <<'KPY'
+          from pathlib import Path
+          p = Path("arch/arm64/Kconfig")
+          s = p.read_text()
+          a = "config LITTLE_CPU_MASK\\n\\tint \\\"Bitmask of available LITTLE CPUs\\\"\\n"
+          b = "config BIG_CPU_MASK\\n\\tint \\\"Bitmask of available big CPUs\\\"\\n"
+          if a not in s or b not in s:
+              raise SystemExit("CPU mask Kconfig anchors not found")
+          s = s.replace(a, a + "\\tdefault 63\\n", 1)
+          s = s.replace(b, b + "\\tdefault 192\\n", 1)
+          p.write_text(s)
+          KPY
+          make ARCH=arm64 olddefconfig
+          test "$(git hash-object arch/arm64/configs/Surya-stock_defconfig)" = "$EXPECTED_DEFCONFIG_BLOB"
+          grep -q '^# CONFIG_CPUSET_ASSIST is not set$' .config
+          cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"'''
+          p.write_text(s[:start] + replacement + s[end:])
+          PY
+          git diff --check
+          git add .github/workflows/mode-cloning-donor-repro-12701.yml
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git commit -m 'fix donor Kconfig prompts without changing donor defconfig'
+          git push
