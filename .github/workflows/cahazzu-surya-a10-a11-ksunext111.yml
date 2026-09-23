@@ -43,11 +43,13 @@ jobs:
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "${{ matrix.source_sha }}"
 
-      - name: Verify GCC cross toolchain
+      - name: Fetch Android GCC 4.9 toolchains
         run: |
           set -euxo pipefail
-          aarch64-linux-gnu-gcc --version | head -n 1
-          arm-linux-gnueabi-gcc --version | head -n 1
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9.git gcc64
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9.git gcc32
+          "$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-gcc" --version | head -n 1
+          "$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-gcc" --version | head -n 1
 
       - name: Integrate KernelSU Next v1.1.1
         working-directory: kernel
@@ -66,8 +68,8 @@ jobs:
           set -euxo pipefail
           COMMON=(
             O=out ARCH=arm64
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            CROSS_COMPILE="$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-"
+            CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-"
             DTC_EXT=/usr/bin/dtc
           )
           make "${COMMON[@]}" surya_defconfig
@@ -105,8 +107,8 @@ jobs:
           set -o pipefail
           COMMON=(
             O=out ARCH=arm64
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            CROSS_COMPILE="$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-"
+            CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-"
             DTC_EXT=/usr/bin/dtc
           )
           make "${COMMON[@]}" -j"$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/build-${{ matrix.variant }}.log"
