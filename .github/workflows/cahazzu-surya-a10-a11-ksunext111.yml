@@ -59,32 +59,14 @@ jobs:
           test -f KernelSU-Next/kernel/Kconfig
           git -C KernelSU-Next describe --tags --exact-match | grep -Fx v1.1.1
 
-      - name: Patch A10 legacy source compile blockers
+      - name: Patch A10 legacy source compile blocker
         working-directory: kernel
         run: |
           set -euxo pipefail
-
-          # taskstats: malformed preprocessor fallback in this legacy source
+          # This source has a literal malformed '#elif' with no expression.
           sed -i '/^#elif$/c\#else' kernel/taskstats.c
-
-          # statfs: avoid legacy FORTIFY false-positive in compile-time memcpy branch
-          perl -0pi -e 's/\tif \(sizeof\(buf\) == sizeof\(\*st\)\)\n\t\tmemcpy\(&buf, st, [^\n]*\);\n\telse \{/\t{/g' fs/statfs.c
-
-          # DES: copy the expanded key word-by-word instead of memcpy so FORTIFY
-          # can see the exact destination bounds on this old tree.
-          perl -0pi -e 's/(static int des_setkey\(struct crypto_tfm \*tfm, const u8 \*key,\n\t\t      unsigned int keylen\)\n\{\n\tstruct des_ctx \*dctx = crypto_tfm_ctx\(tfm\);\n\tu32 \*flags = &tfm->crt_flags;\n\tu32 tmp\[DES_EXPKEY_WORDS\];\n\tint ret;)/$1\n\tint i;/' crypto/des_generic.c
-          perl -0pi -e 's/\t\/\* Copy to output \*\/\n\tmemcpy\(dctx->expkey, tmp, sizeof\(dctx->expkey\)\);/\t\/\* Copy to output \*\/\n\tfor (i = 0; i < DES_EXPKEY_WORDS; i++)\n\t\tdctx->expkey[i] = tmp[i];/' crypto/des_generic.c
-
-          # quota: use the already typed struct pointer so object bounds are known.
-          sed -i 's/memcmp(&empty, dp, sizeof(struct v2r1_disk_dqblk))/memcmp(\&empty, d, sizeof(empty))/' fs/quota/quota_v2.c
-
-          # Validate only the intended edits.
           test "$(grep -c '^#elif$' kernel/taskstats.c)" -eq 0
-          test "$(grep -c 'if (sizeof(buf) == sizeof(\*st))' fs/statfs.c || true)" -eq 0
-          grep -q 'for (i = 0; i < DES_EXPKEY_WORDS; i++)' crypto/des_generic.c
-          grep -q 'memcmp(&empty, d, sizeof(empty))' fs/quota/quota_v2.c
-          grep -n -A5 -B3 'Copy to output' crypto/des_generic.c
-          grep -n -A3 -B3 'memcmp(&empty' fs/quota/quota_v2.c
+          grep -n -A2 -B2 '#else' kernel/taskstats.c | tail -n 10
 
       - name: Configure CahAzzu
         working-directory: kernel
@@ -111,6 +93,7 @@ jobs:
           if [ "${{ matrix.variant }}" = "a10" ]; then
             scripts/config --file out/.config -d CC_STACKPROTECTOR_REGULAR
             scripts/config --file out/.config -e CC_STACKPROTECTOR_STRONG
+            scripts/config --file out/.config -d FORTIFY_SOURCE
           fi
           make "${COMMON[@]}" olddefconfig
 
@@ -123,6 +106,7 @@ jobs:
           if [ "${{ matrix.variant }}" = "a10" ]; then
             grep -Fx 'CONFIG_CC_STACKPROTECTOR_STRONG=y' out/.config
             grep -Fx '# CONFIG_CC_STACKPROTECTOR_REGULAR is not set' out/.config
+            grep -Fx '# CONFIG_FORTIFY_SOURCE is not set' out/.config
           fi
 
       - name: Build CahAzzu
