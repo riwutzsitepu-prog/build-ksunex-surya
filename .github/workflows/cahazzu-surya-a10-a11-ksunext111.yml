@@ -64,11 +64,224 @@ jobs:
         run: |
           set -euxo pipefail
           sed -i '/^#elif$/c\#else' kernel/taskstats.c
-          perl -0pi -e 's/memcpy\(&buf, st, sizeof\(\*st\)\);/memcpy(&buf, st, sizeof(buf) < sizeof(*st) ? sizeof(buf) : sizeof(*st));/g' fs/statfs.c
-          test "$(grep -c '^#elif$' kernel/taskstats.c)" -eq 0
-          test "$(grep -c 'sizeof(buf) < sizeof(\*st)' fs/statfs.c)" -eq 2
+          perl -0pi -e 's/\tif \(sizeof\(buf\) == sizeof\(\*st\)\)\n\t\tmemcpy\(&buf, st, [^\n]*\);\n\telse \{/\t{/g' fs/statfs.c
+          test "$(grep -c '^#elif
+      - name: Configure CahAzzu
+        working-directory: kernel
+        env:
+          KBUILD_BUILD_USER: CahAzzu
+          KBUILD_BUILD_HOST: CahAzzu
+        run: |
+          set -euxo pipefail
+          COMMON=(
+            O=out ARCH=arm64
+            CROSS_COMPILE="$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-"
+            CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-"
+            DTC_EXT=/usr/bin/dtc
+          )
+          make "${COMMON[@]}" surya_defconfig
+          scripts/config --file out/.config --set-str LOCALVERSION "-CahAzzu"
+          scripts/config --file out/.config -d LOCALVERSION_AUTO
+          scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config -e MODULES
+          scripts/config --file out/.config -e KPROBES
+          scripts/config --file out/.config -e KSU_KPROBES_HOOK
+          scripts/config --file out/.config -d KSU_DEBUG
+          scripts/config --file out/.config -e OVERLAY_FS
+          if [ "${{ matrix.variant }}" = "a10" ]; then
+            scripts/config --file out/.config -d CC_STACKPROTECTOR_REGULAR
+            scripts/config --file out/.config -e CC_STACKPROTECTOR_STRONG
+          fi
+          make "${COMMON[@]}" olddefconfig
+
+          grep -Fx 'CONFIG_KSU=y' out/.config
+          grep -Fx 'CONFIG_MODULES=y' out/.config
+          grep -Fx 'CONFIG_KPROBES=y' out/.config
+          grep -Fx 'CONFIG_KSU_KPROBES_HOOK=y' out/.config
+          grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' out/.config
+          grep -Fx '# CONFIG_LOCALVERSION_AUTO is not set' out/.config
+          if [ "${{ matrix.variant }}" = "a10" ]; then
+            grep -Fx 'CONFIG_CC_STACKPROTECTOR_STRONG=y' out/.config
+            grep -Fx '# CONFIG_CC_STACKPROTECTOR_REGULAR is not set' out/.config
+          fi
+
+      - name: Build CahAzzu
+        working-directory: kernel
+        env:
+          KBUILD_BUILD_USER: CahAzzu
+          KBUILD_BUILD_HOST: CahAzzu
+        run: |
+          set -o pipefail
+          COMMON=(
+            O=out ARCH=arm64
+            CROSS_COMPILE="$GITHUB_WORKSPACE/gcc64/bin/aarch64-linux-android-"
+            CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/gcc32/bin/arm-linux-androideabi-"
+            DTC_EXT=/usr/bin/dtc
+          )
+          make "${COMMON[@]}" -j"$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/build-${{ matrix.variant }}.log"
+          test -s "out/arch/arm64/boot/${{ matrix.image_name }}"
+          echo "Kernel release: $(cat out/include/config/kernel.release)"
+          ls -lh "out/arch/arm64/boot/${{ matrix.image_name }}"
+
+      - name: Stage kernel payload
+        if: success()
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/stage"
+          cp "out/arch/arm64/boot/${{ matrix.image_name }}" "$GITHUB_WORKSPACE/stage/"
+          cp out/include/config/kernel.release "$GITHUB_WORKSPACE/stage/kernel.release"
+          cp out/.config "$GITHUB_WORKSPACE/stage/config"
+          sha256sum "$GITHUB_WORKSPACE/stage/${{ matrix.image_name }}" > "$GITHUB_WORKSPACE/stage/SHA256SUMS"
+
+      - name: Upload build payload
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-${{ matrix.variant }}
+          path: stage/
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-${{ matrix.variant }}-failure
+          path: build-${{ matrix.variant }}.log
+          if-no-files-found: ignore
+
+  package:
+    name: Package CahAzzu.zip
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download A10 payload
+        uses: actions/download-artifact@v4
+        with:
+          name: CahAzzu-a10
+          path: payload/a10
+
+      - name: Download successful A11 payload from Run #2
+        uses: actions/download-artifact@v4
+        with:
+          name: CahAzzu-a11
+          path: payload/a11
+          repository: riwutzsitepu-prog/build-ksunex-surya
+          run-id: 35862783280
+          github-token: ${{ github.token }}
+
+      - name: Prepare AnyKernel3 for surya
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 https://github.com/rigaz29/surya-kernel-build.git packbase
+          mkdir -p CahAzzu/variants/a10 CahAzzu/variants/a11
+          cp -a packbase/anykernel/. CahAzzu/
+          cp payload/a10/Image.gz-dtb CahAzzu/variants/a10/Image.gz-dtb
+          cp payload/a11/Image.gz CahAzzu/variants/a11/Image.gz
+
+          cat > CahAzzu/anykernel.sh <<'EOF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## CahAzzu universal Android 10/11 package for Poco X3 NFC (surya)
+
+          properties() { '
+          kernel.string=CahAzzu
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=
+          device.name3=
+          device.name4=
+          device.name5=
+          supported.versions=10,11
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          }
+
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          # Mount likely Android dynamic/system-as-root paths read-only if recovery has not.
+          mount /system 2>/dev/null || true
+          mount /system_root 2>/dev/null || true
+          mount /vendor 2>/dev/null || true
+
+          sdk="";
+          for p in \
+            /system/build.prop \
+            /system/system/build.prop \
+            /system_root/system/build.prop \
+            /system_root/system/system/build.prop; do
+            if [ -f "$p" ]; then
+              sdk=$(grep -m1 '^ro.build.version.sdk=' "$p" | cut -d= -f2 | tr -d '\r')
+              [ -n "$sdk" ] && break
+            fi
+          done
+
+          ui_print "- CahAzzu";
+          ui_print "- Detected Android SDK: ${sdk:-unknown}";
+
+          rm -f Image Image.gz Image.gz-dtb Image.lz4 zImage zImage-dtb
+
+          case "$sdk" in
+            29)
+              ui_print "- Android 10 detected";
+              cp variants/a10/Image.gz-dtb Image.gz-dtb || abort "A10 payload missing";
+              ;;
+            30)
+              ui_print "- Android 11 detected";
+              cp variants/a11/Image.gz Image.gz || abort "A11 payload missing";
+              ;;
+            *)
+              abort "CahAzzu supports Android 10/11 only (SDK 29/30).";
+              ;;
+          esac
+
+          dump_boot;
+          write_boot;
+          EOF
+
+          sed -i 's/^[[:space:]]\{10\}//' CahAzzu/anykernel.sh
+          chmod 755 CahAzzu/anykernel.sh
+
+      - name: Validate and zip
+        run: |
+          set -euxo pipefail
+          grep -q 'kernel.string=CahAzzu' CahAzzu/anykernel.sh
+          test -s CahAzzu/variants/a10/Image.gz-dtb
+          test -s CahAzzu/variants/a11/Image.gz
+          (
+            cd CahAzzu
+            zip -r9 ../CahAzzu.zip . -x '.git*' >/dev/null
+          )
+          test -s CahAzzu.zip
+          sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
+          unzip -l CahAzzu.zip | grep -E 'anykernel.sh|variants/a10/Image.gz-dtb|variants/a11/Image.gz'
+
+      - name: Upload final CahAzzu
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu
+          path: |
+            CahAzzu.zip
+            CahAzzu.zip.sha256
+          if-no-files-found: error
+ kernel/taskstats.c)" -eq 0
+          test "$(grep -c 'if (sizeof(buf) == sizeof(\*st))' fs/statfs.c || true)" -eq 0
           grep -n -A2 -B2 '#else' kernel/taskstats.c | tail -n 10
-          grep -n 'memcpy(&buf, st' fs/statfs.c
+          grep -n -A8 'struct statfs buf' fs/statfs.c
+          grep -n -A8 'struct statfs64 buf' fs/statfs.c
 
       - name: Configure CahAzzu
         working-directory: kernel
