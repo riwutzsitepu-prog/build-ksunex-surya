@@ -135,9 +135,21 @@ jobs:
           scripts/config --file .config --set-str LOCALVERSION "-CahAzzu"
           scripts/config --file .config -d LOCALVERSION_AUTO
 
+          # Preserve QASSA CPU topology values required by this 4.14.190 Kconfig.
+          scripts/config --file .config --set-val LITTLE_CPU_MASK 63
+          scripts/config --file .config --set-val BIG_CPU_MASK 192
+          scripts/config --file .config -d CPUSET_ASSIST
+
           export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           make ARCH=arm64 olddefconfig
 
+          grep -Fx 'CONFIG_LITTLE_CPU_MASK=63' .config
+          grep -Fx 'CONFIG_BIG_CPU_MASK=192' .config
+          grep -Fx '# CONFIG_CPUSET_ASSIST is not set' .config
           grep -Fx 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI=y' .config
           grep -Fx 'CONFIG_AW8624_HAPTIC=y' .config
           grep -Fx 'CONFIG_DRV2624_HAPTIC=y' .config
