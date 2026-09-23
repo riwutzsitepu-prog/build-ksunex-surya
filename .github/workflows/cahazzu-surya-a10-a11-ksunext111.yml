@@ -69,9 +69,14 @@ jobs:
           export PATH="$PATH:$GITHUB_WORKSPACE/proton-clang/bin"
           COMMON=(
             O=out ARCH=arm64
-            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
-            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-            READELF=llvm-readelf
+            CC="$GITHUB_WORKSPACE/proton-clang/bin/clang"
+            LD="$GITHUB_WORKSPACE/proton-clang/bin/ld.lld"
+            AR="$GITHUB_WORKSPACE/proton-clang/bin/llvm-ar"
+            NM="$GITHUB_WORKSPACE/proton-clang/bin/llvm-nm"
+            OBJCOPY="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objcopy"
+            OBJDUMP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objdump"
+            STRIP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-strip"
+            READELF="$GITHUB_WORKSPACE/proton-clang/bin/llvm-readelf"
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             DTC_EXT=/usr/bin/dtc
@@ -80,6 +85,7 @@ jobs:
           scripts/config --file out/.config --set-str LOCALVERSION "-CahAzzu"
           scripts/config --file out/.config -d LOCALVERSION_AUTO
           scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config -e MODULES
           scripts/config --file out/.config -e KPROBES
           scripts/config --file out/.config -e KSU_KPROBES_HOOK
           scripts/config --file out/.config -d KSU_DEBUG
@@ -87,6 +93,7 @@ jobs:
           make "${COMMON[@]}" olddefconfig
 
           grep -Fx 'CONFIG_KSU=y' out/.config
+          grep -Fx 'CONFIG_MODULES=y' out/.config
           grep -Fx 'CONFIG_KPROBES=y' out/.config
           grep -Fx 'CONFIG_KSU_KPROBES_HOOK=y' out/.config
           grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' out/.config
@@ -102,9 +109,14 @@ jobs:
           export PATH="$PATH:$GITHUB_WORKSPACE/proton-clang/bin"
           COMMON=(
             O=out ARCH=arm64
-            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm
-            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip
-            READELF=llvm-readelf
+            CC="$GITHUB_WORKSPACE/proton-clang/bin/clang"
+            LD="$GITHUB_WORKSPACE/proton-clang/bin/ld.lld"
+            AR="$GITHUB_WORKSPACE/proton-clang/bin/llvm-ar"
+            NM="$GITHUB_WORKSPACE/proton-clang/bin/llvm-nm"
+            OBJCOPY="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objcopy"
+            OBJDUMP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objdump"
+            STRIP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-strip"
+            READELF="$GITHUB_WORKSPACE/proton-clang/bin/llvm-readelf"
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             DTC_EXT=/usr/bin/dtc
