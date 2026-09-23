@@ -42,17 +42,19 @@ if "ksu_handle_rename(old_dentry, new_dentry);" not in s:
 #endif"""
     s = s[:m.start()] + hook + s[m.end():]
 
-old = """int security_task_fix_setuid(struct cred *new, const struct cred *old,
-                             int flags)
-{"""
-new = old + """
+setuid_pat = re.compile(
+    r"(int security_task_fix_setuid\(struct cred \*new, const struct cred \*old,\s*"
+    r"int flags\)\s*\{)"
+)
+if "ksu_handle_setuid(new, old);" not in s:
+    m = setuid_pat.search(s)
+    if not m:
+        raise SystemExit("security setuid anchor not found")
+    hook = m.group(1) + """
 #ifdef CONFIG_KSU
     ksu_handle_setuid(new, old);
 #endif"""
-if "ksu_handle_setuid(new, old);" not in s:
-    if old not in s:
-        raise SystemExit("security setuid anchor not found")
-    s = s.replace(old, new, 1)
+    s = s[:m.start()] + hook + s[m.end():]
 
 old = """int security_task_prctl(int option, unsigned long arg2, unsigned long arg3,
                         unsigned long arg4, unsigned long arg5)
