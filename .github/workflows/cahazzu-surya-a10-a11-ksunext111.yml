@@ -20,7 +20,7 @@ jobs:
         include:
           - variant: a10
             source_sha: fa1df47eb127d03f531917f2b47d6c703361d703
-            image_name: Image.gz-dtb
+            image_name: Image.gz
 
     steps:
       - name: Checkout build repo
@@ -116,6 +116,7 @@ jobs:
             scripts/config --file out/.config -d CC_STACKPROTECTOR_REGULAR
             scripts/config --file out/.config -e CC_STACKPROTECTOR_STRONG
             scripts/config --file out/.config -d FORTIFY_SOURCE
+            scripts/config --file out/.config -d BUILD_ARM64_APPENDED_DTB_IMAGE
           fi
           make "${COMMON[@]}" olddefconfig
 
@@ -129,6 +130,7 @@ jobs:
             grep -Fx 'CONFIG_CC_STACKPROTECTOR_STRONG=y' out/.config
             grep -Fx '# CONFIG_CC_STACKPROTECTOR_REGULAR is not set' out/.config
             grep -Fx '# CONFIG_FORTIFY_SOURCE is not set' out/.config
+            grep -Fx '# CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set' out/.config
           fi
 
       - name: Build CahAzzu
@@ -202,7 +204,7 @@ jobs:
           git clone --depth=1 https://github.com/rigaz29/surya-kernel-build.git packbase
           mkdir -p CahAzzu/variants/a10 CahAzzu/variants/a11
           cp -a packbase/anykernel/. CahAzzu/
-          cp payload/a10/Image.gz-dtb CahAzzu/variants/a10/Image.gz-dtb
+          cp payload/a10/Image.gz CahAzzu/variants/a10/Image.gz
           cp payload/a11/Image.gz CahAzzu/variants/a11/Image.gz
 
           cat > CahAzzu/anykernel.sh <<'EOF'
@@ -263,7 +265,7 @@ jobs:
           case "$sdk" in
             29)
               ui_print "- Android 10 detected";
-              cp variants/a10/Image.gz-dtb Image.gz-dtb || abort "A10 payload missing";
+              cp variants/a10/Image.gz Image.gz || abort "A10 payload missing";
               ;;
             30)
               ui_print "- Android 11 detected";
@@ -285,7 +287,7 @@ jobs:
         run: |
           set -euxo pipefail
           grep -q 'kernel.string=CahAzzu' CahAzzu/anykernel.sh
-          test -s CahAzzu/variants/a10/Image.gz-dtb
+          test -s CahAzzu/variants/a10/Image.gz
           test -s CahAzzu/variants/a11/Image.gz
           (
             cd CahAzzu
@@ -293,7 +295,7 @@ jobs:
           )
           test -s CahAzzu.zip
           sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
-          unzip -l CahAzzu.zip | grep -E 'anykernel.sh|variants/a10/Image.gz-dtb|variants/a11/Image.gz'
+          unzip -l CahAzzu.zip | grep -E 'anykernel.sh|variants/a10/Image.gz|variants/a11/Image.gz'
 
       - name: Upload final CahAzzu
         uses: actions/upload-artifact@v4
