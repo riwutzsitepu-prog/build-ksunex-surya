@@ -181,6 +181,11 @@ jobs:
           fi
           grep -Fn '#include <linux/nmi.h>' kernel/sched/debug.c
 
+          # First actual Run #10 compile blocker: legacy HID trace include path.
+          grep -Fq '#define TRACE_INCLUDE_PATH .' drivers/hid/hid-trace.h
+          sed -i 's|#define TRACE_INCLUDE_PATH \\.|#define TRACE_INCLUDE_PATH ../../drivers/hid|' drivers/hid/hid-trace.h
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/hid' drivers/hid/hid-trace.h
+
       - name: Build CahAzzu
         working-directory: kernel
         run: |
