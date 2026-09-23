@@ -63,26 +63,10 @@ jobs:
         working-directory: kernel
         run: |
           set -euxo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          p = Path("kernel/taskstats.c")
-          s = p.read_text()
-          old = "}\n#elif\nstatic void sysstats_fill_zoneinfo(struct sys_memstats *stats)"
-          new = "}\n#else\nstatic void sysstats_fill_zoneinfo(struct sys_memstats *stats)"
-          if old not in s:
-              raise SystemExit("taskstats legacy marker not found")
-          p.write_text(s.replace(old, new, 1))
-
-          p = Path("fs/statfs.c")
-          s = p.read_text()
-          old = "memcpy(&buf, st, sizeof(*st));"
-          new = "memcpy(&buf, st, sizeof(buf) < sizeof(*st) ? sizeof(buf) : sizeof(*st));"
-          count = s.count(old)
-          if count != 2:
-              raise SystemExit(f"expected 2 statfs memcpy sites, found {count}")
-          p.write_text(s.replace(old, new))
-          PY
+          sed -i '/^#elif$/c\#else' kernel/taskstats.c
+          perl -0pi -e 's/memcpy\(&buf, st, sizeof\(\*st\)\);/memcpy(&buf, st, sizeof(buf) < sizeof(*st) ? sizeof(buf) : sizeof(*st));/g' fs/statfs.c
+          test "$(grep -c '^#elif$' kernel/taskstats.c)" -eq 0
+          test "$(grep -c 'sizeof(buf) < sizeof(\*st)' fs/statfs.c)" -eq 2
           grep -n -A2 -B2 '#else' kernel/taskstats.c | tail -n 10
           grep -n 'memcpy(&buf, st' fs/statfs.c
 
