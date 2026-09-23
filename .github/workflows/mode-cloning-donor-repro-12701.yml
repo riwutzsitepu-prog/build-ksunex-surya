@@ -344,9 +344,7 @@ jobs:
           ! grep -q '^CONFIG_BIG_CPU_MASK' .config
 
           export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
-          # Keep donor defconfig untouched; resolve public-tree-only Kconfig
-          # symbols in generated .config, using the source tree's Surya masks.
-          printf '%s\n' 'CONFIG_LITTLE_CPU_MASK=63' 'CONFIG_BIG_CPU_MASK=192' >> .config
+          printf '%s\\n' 'CONFIG_LITTLE_CPU_MASK=63' 'CONFIG_BIG_CPU_MASK=192' >> .config
           make ARCH=arm64 olddefconfig
           grep -q '^CONFIG_LITTLE_CPU_MASK=63
           cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"
