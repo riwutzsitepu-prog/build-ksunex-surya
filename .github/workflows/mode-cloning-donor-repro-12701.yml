@@ -347,7 +347,7 @@ jobs:
           # Kconfig has two donor-tree string prompts not represented in the
           # historical defconfig. Supply empty answers only on stdin; do not add
           # LITTLE_CPU_MASK/BIG_CPU_MASK assignments to the donor config.
-          printf '\n\n' | make ARCH=arm64 oldconfig
+          (printf '\n\n' || true) | make ARCH=arm64 oldconfig
 
           grep -q '^# CONFIG_CPUSET_ASSIST is not set
           cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"
