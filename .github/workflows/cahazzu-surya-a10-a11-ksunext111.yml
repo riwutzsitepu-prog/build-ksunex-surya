@@ -78,8 +78,8 @@ jobs:
           from pathlib import Path
           p = Path('drivers/gpu/drm/msm/sde_hdcp_2x.c')
           s = p.read_text()
-          old = '\\tu8 const hdcp_min_enc_level_0 = 0, hdcp_min_enc_level_1 = 1,\\n\\t   hdcp_min_enc_level_2 = 2;'
-          new = '\\tenum { hdcp_min_enc_level_0 = 0, hdcp_min_enc_level_1 = 1,\\n\\t   hdcp_min_enc_level_2 = 2 };'
+          old = '\tu8 const hdcp_min_enc_level_0 = 0, hdcp_min_enc_level_1 = 1,\n\t   hdcp_min_enc_level_2 = 2;'
+          new = '\tenum { hdcp_min_enc_level_0 = 0, hdcp_min_enc_level_1 = 1,\n\t   hdcp_min_enc_level_2 = 2 };'
           assert old in s
           p.write_text(s.replace(old, new, 1))
           PY
