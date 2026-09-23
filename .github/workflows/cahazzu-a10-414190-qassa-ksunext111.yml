@@ -62,7 +62,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
           grep -q '^VERSION = 4$' Makefile
           grep -q '^PATCHLEVEL = 14$' Makefile
-          grep -q '^SUBLEVEL = 190
+          grep -q '^SUBLEVEL = 190$' Makefile
           test -f arch/arm64/configs/vendor/surya-stock_defconfig
           ACTUAL_BLOB="$(git hash-object arch/arm64/configs/vendor/surya-stock_defconfig)"
           echo "defconfig blob=$ACTUAL_BLOB"
