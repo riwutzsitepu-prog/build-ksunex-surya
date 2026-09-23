@@ -345,12 +345,10 @@ jobs:
 
           export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
 
-          # Public source exposes CPU mask strings absent from the exact donor
-          # defconfig. Resolve them only in generated .config so silentoldconfig
-          # cannot stop for interactive input; donor base blob stays untouched.
-          scripts/config --file .config --set-str LITTLE_CPU_MASK "0-5"
-          scripts/config --file .config --set-str BIG_CPU_MASK "6-7"
-          make ARCH=arm64 olddefconfig
+          # Public source exposes CPU mask prompts absent from the exact donor
+          # defconfig. Feed Kconfig defaults non-interactively without adding
+          # LITTLE_CPU_MASK/BIG_CPU_MASK assignments to the workflow.
+          yes "" | make ARCH=arm64 oldconfig
 
           grep -q '^# CONFIG_CPUSET_ASSIST is not set
           cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"
