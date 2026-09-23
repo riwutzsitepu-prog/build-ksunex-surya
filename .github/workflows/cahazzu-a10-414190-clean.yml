@@ -245,6 +245,20 @@ jobs:
           PY
           grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/media/platform/msm/camera/cam_utils' drivers/media/platform/msm/camera/cam_utils/cam_trace.h
 
+          # First actual Run #15 compile blocker: totalram_pages is a function in this 4.14.190 tree.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("drivers/staging/android/lowmemorykiller.c")
+          s = p.read_text()
+          old = "mult_frac(100, nr_usable, totalram_pages)"
+          new = "mult_frac(100, nr_usable, totalram_pages())"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("LMK totalram_pages anchor not found")
+              p.write_text(s.replace(old, new, 1))
+          PY
+          grep -Fn 'mult_frac(100, nr_usable, totalram_pages())' drivers/staging/android/lowmemorykiller.c
+
           # First actual Run #15 compile blocker: totalram_pages is a function on this 4.14.190 tree.
           python3 - <<'PY'
           from pathlib import Path
