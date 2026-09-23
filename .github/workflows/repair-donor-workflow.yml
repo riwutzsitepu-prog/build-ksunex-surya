@@ -1,0 +1,34 @@
+name: Repair donor workflow syntax
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/repair-donor-workflow.yml'
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch only malformed donor config line
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/mode-cloning-donor-repro-12701.yml')
+          s=p.read_text()
+          bad="          grep -q '^# CONFIG_CPUSET_ASSIST is not set\n\n      - name: Apply public-tree compile compatibility fixes"
+          good="          grep -q '^# CONFIG_CPUSET_ASSIST is not set$' .config\n          cp .config \"$GITHUB_WORKSPACE/DONOR-REPRO.config\"\n\n      - name: Apply public-tree compile compatibility fixes"
+          if bad not in s:
+              raise SystemExit('expected malformed line not found; refusing broad edit')
+          p.write_text(s.replace(bad,good,1))
+          PY
+          git diff --check
+          git diff -- .github/workflows/mode-cloning-donor-repro-12701.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/mode-cloning-donor-repro-12701.yml
+          git commit -m 'fix malformed donor config validation line'
+          git push
