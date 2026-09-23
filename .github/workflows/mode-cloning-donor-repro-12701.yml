@@ -352,8 +352,6 @@ jobs:
           make ARCH=arm64 olddefconfig
 
           grep -q '^# CONFIG_CPUSET_ASSIST is not set
-
-      - name: Apply public-tree compile compatibility fixes
         run: |
           set -euxo pipefail
           cd kernel
