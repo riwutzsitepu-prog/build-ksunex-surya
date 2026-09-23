@@ -132,6 +132,13 @@ jobs:
           scripts/config --file .config -e CRYPTO_DEV_QCOM_ICE
           scripts/config --file .config -d KPROBES
           scripts/config --file .config -e OVERLAY_FS
+
+          # Android/QASSA uses SELinux. SMACK is incompatible with this source's embedded sk_security.
+          scripts/config --file .config -d SECURITY_SMACK
+          scripts/config --file .config -d SECURITY_SMACK_BRINGUP
+          scripts/config --file .config -d SECURITY_SMACK_NETFILTER
+          scripts/config --file .config -d SECURITY_SMACK_APPEND_SIGNALS
+
           scripts/config --file .config --set-str LOCALVERSION "-CahAzzu"
           scripts/config --file .config -d LOCALVERSION_AUTO
 
@@ -155,6 +162,10 @@ jobs:
           grep -Fx 'CONFIG_SCSI_UFS_CRYPTO=y' .config
           grep -Fx 'CONFIG_SCSI_UFS_CRYPTO_QTI=y' .config
           grep -Fx '# CONFIG_KPROBES is not set' .config
+          grep -Fx 'CONFIG_SECURITY_SELINUX=y' .config
+          grep -Fx '# CONFIG_SECURITY_SMACK is not set' .config
+          grep -Fx 'CONFIG_DEFAULT_SECURITY_SELINUX=y' .config
+          grep -Fx 'CONFIG_DEFAULT_SECURITY="selinux"' .config
           grep -Fx 'CONFIG_OVERLAY_FS=y' .config
           grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' .config
           grep -Fx '# CONFIG_LOCALVERSION_AUTO is not set' .config
