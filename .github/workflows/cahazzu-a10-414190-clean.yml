@@ -101,9 +101,11 @@ jobs:
           s = s.replace("obj-$(CONFIG_KSU) += kernelsu.o", "obj-y += kernelsu.o")
           s = s.replace("ccflags-y += -DKSU_UMOUNT\n", "")
           start = s.find('ifneq ($(shell grep -Eq "^static int can_umount"')
-          end = s.find("ccflags-y += -Wno-implicit-function-declaration")
+          end = s.find('ifneq ($(shell grep -q "atomic_t filter_count;"')
           if start >= 0 and end > start:
               s = s[:start] + s[end:]
+          elif start >= 0:
+              raise SystemExit("cannot isolate KSU_UMOUNT compatibility block")
           p.write_text(s)
           PY
 
