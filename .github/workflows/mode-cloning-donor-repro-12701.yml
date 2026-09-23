@@ -345,13 +345,31 @@ jobs:
 
           export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
 
-          # Public source exposes CPU mask prompts absent from the exact donor
-          # defconfig. Feed Kconfig defaults non-interactively without adding
-          # LITTLE_CPU_MASK/BIG_CPU_MASK assignments to the workflow.
-          yes "" | make ARCH=arm64 oldconfig
+          make ARCH=arm64 olddefconfig
 
           grep -q '^# CONFIG_CPUSET_ASSIST is not set
           cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"
+
+      - name: Apply only CPUSET_ASSIST disabled compile guard
+        run: |
+          set -euxo pipefail
+          cd kernel
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("kernel/cgroup/cpuset.c")
+          s = p.read_text()
+          start = s.find("static ssize_t cpuset_write_resmask_assist(")
+          if start < 0:
+              raise SystemExit("cpuset assist helper not found")
+          if s.rfind("#ifdef CONFIG_CPUSET_ASSIST", 0, start) > s.rfind("#endif", 0, start):
+              raise SystemExit(0)
+          end = s.find("\n}", start)
+          if end < 0:
+              raise SystemExit("cpuset assist helper end not found")
+          end += 2
+          s = s[:start] + "#ifdef CONFIG_CPUSET_ASSIST\n" + s[start:end] + "\n#endif" + s[end:]
+          p.write_text(s)
+          PY
 
       - name: Build donor reproduction Image.gz
         run: |
