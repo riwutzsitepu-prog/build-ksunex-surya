@@ -347,11 +347,9 @@ jobs:
           # Keep the exact donor defconfig file unchanged. Kconfig requires
           # runtime answers for two string symbols missing from that historical
           # file; pass them as make variables rather than adding config lines.
-          # Generate Kconfig state non-interactively without modifying the
-          # frozen donor defconfig file itself. These two public-tree symbols
-          # are required before the later build invokes silentoldconfig.
-          scripts/config --file .config --set-str LITTLE_CPU_MASK "0-5"
-          scripts/config --file .config --set-str BIG_CPU_MASK "6-7"
+          # Resolve public-tree-only Kconfig strings in generated .config.
+          # The frozen donor defconfig remains byte-for-byte unchanged.
+          printf 'CONFIG_LITTLE_CPU_MASK="0-5"\nCONFIG_BIG_CPU_MASK="6-7"\n' >> .config
           make ARCH=arm64 olddefconfig
           test "$(git hash-object arch/arm64/configs/Surya-stock_defconfig)" = "$EXPECTED_DEFCONFIG_BLOB"
 
