@@ -349,30 +349,6 @@ jobs:
           grep -q '^# CONFIG_CPUSET_ASSIST is not set$' .config
           cp .config "$GITHUB_WORKSPACE/DONOR-REPRO.config"
 
-      - name: Apply public-tree cpuset compile compatibility fix
-        run: |
-          set -euxo pipefail
-          cd kernel
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("kernel/cgroup/cpuset.c")
-          s = p.read_text()
-          old = """static ssize_t cpuset_write_resmask_assist(struct kernfs_open_file *of,
-                                           struct cs_target tgt, size_t nbytes,
-                                           loff_t off)
-{
-        pr_info("cpuset_assist: setting %s to %s\\n", tgt.name, tgt.cpus);
-        return cpuset_write_resmask(of, tgt.cpus, nbytes, off);
-}"""
-          new = """#ifdef CONFIG_CPUSET_ASSIST
-""" + old + """
-#endif"""
-          if "#ifdef CONFIG_CPUSET_ASSIST\nstatic ssize_t cpuset_write_resmask_assist" not in s:
-              if old not in s:
-                  raise SystemExit("cpuset assist anchor not found")
-              p.write_text(s.replace(old, new, 1))
-          PY
-
       - name: Build donor reproduction Image.gz
         run: |
           set -o pipefail
