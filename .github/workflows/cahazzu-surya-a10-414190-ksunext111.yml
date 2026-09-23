@@ -1,0 +1,567 @@
+name: CahAzzu Surya A10 4.14.190 KSU Next 1.1.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cahazzu-surya-a10-414190-ksunext111.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    env:
+      KERNEL_REPO: https://github.com/stormbreaker-project/kernel_xiaomi_surya.git
+      KERNEL_COMMIT: 4738039b3cafe1ab9afa85d726049247f7939580
+      EXPECTED_DEFCONFIG_BLOB: eac02495481ef52df965e2f02e96417a4a55951e
+      EXPECTED_DTB_SHA256: 8eb391b228f59ffc98885fcb2101cc2f49965de3e7e4aba5ba864158e43b31e1
+      DONOR_COMMIT: aa24e82bacd6ccaf9bca7937a7e2ad99867ab5ad
+      DONOR_B64_SHA256: 6c7b01b3379bb1bf86e0652986ba41dfdbf85e2d959e812e4898f4cff445c9ae
+      DONOR_B64_SIZE: '167296'
+      DONOR_XZ_SHA256: edf5031085d2ba244f92b809cb231f702e2a64db1d4ef88f40fab907bf521200
+      DONOR_XZ_SIZE: '125472'
+      DONOR_TAIL_SIZE: '2092004'
+      KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next.git
+      KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
+      KSU_TAG: v1.1.1
+      TC_REPO: https://github.com/kdrag0n/proton-clang.git
+      TC_COMMIT: 08a35cd973e866932ca1b7f3e573293e0829c129
+      ZIP_NAME: CahAzzu.zip
+      TAG_NAME: cahazzu-surya-a10-4.14.190-ksunext-v1.1.1
+
+    steps:
+      - name: Checkout exact validated QASSA donor payload
+        uses: actions/checkout@v4
+        with:
+          repository: riwutzsitepu-prog/trial-kernel
+          ref: ${{ env.DONOR_COMMIT }}
+          path: donor_repo
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl file flex git \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev \
+            make python3 python-is-python3 rsync unzip xz-utils zip zstd
+
+      - name: Clone StormBreaker 4.14.190 source
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -q '^VERSION = 4$' Makefile
+          grep -q '^PATCHLEVEL = 14$' Makefile
+          grep -q '^SUBLEVEL = 190
+          test -f arch/arm64/configs/vendor/surya-stock_defconfig
+          ACTUAL_BLOB="$(git hash-object arch/arm64/configs/vendor/surya-stock_defconfig)"
+          echo "defconfig blob=$ACTUAL_BLOB"
+          test "$ACTUAL_BLOB" = "$EXPECTED_DEFCONFIG_BLOB"
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/kernel-source-sha.txt"
+
+      - name: Prepare exact Proton Clang 13 donor toolchain
+        run: |
+          set -euxo pipefail
+          git init proton-clang
+          cd proton-clang
+          git remote add origin "$TC_REPO"
+          git fetch --depth=1 origin "$TC_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$TC_COMMIT"
+          test -x bin/clang
+          ./bin/clang --version | head -n3 | tee "$GITHUB_WORKSPACE/compiler.txt"
+          ./bin/clang --version | grep -q '9829f5e6b1bca9b61efc629770d28bb9014dec45'
+
+      - name: Integrate exact KernelSU Next v1.1.1
+        run: |
+          set -euxo pipefail
+          cd kernel
+          git clone "$KSU_REPO" KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next describe --tags --exact-match)" = "$KSU_TAG"
+
+          rm -rf drivers/kernelsu
+          ln -s ../KernelSU-Next/kernel drivers/kernelsu
+
+          grep -qF 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          grep -qF 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          git -C KernelSU-Next rev-parse HEAD | tee "$GITHUB_WORKSPACE/ksunext-source-sha.txt"
+
+      - name: Preserve NOUMOUNT behavior
+        run: |
+          set -euxo pipefail
+          cd kernel
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("KernelSU-Next/kernel/Makefile")
+          s = p.read_text()
+
+          s = s.replace("ccflags-y += -DKSU_UMOUNT\n", "")
+
+          start = s.find('ifneq ($(shell grep -Eq "^static int can_umount"')
+          stop = s.find('ifneq ($(shell grep -q "atomic_t filter_count;"')
+          if start >= 0 and stop > start:
+              s = s[:start] + s[stop:]
+          elif start >= 0:
+              raise SystemExit("cannot locate end of KSU_UMOUNT compatibility block")
+
+          p.write_text(s)
+          PY
+          ! grep -q 'ccflags-y += -DKSU_UMOUNT' KernelSU-Next/kernel/Makefile
+
+      - name: Apply KSU Next 1.1.1 manual hooks
+        run: |
+          set -euxo pipefail
+          cd kernel
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def once(path, old, new, desc):
+              p = Path(path)
+              s = p.read_text()
+              if new in s:
+                  return
+              if old not in s:
+                  raise SystemExit(f"{desc}: anchor not found in {path}")
+              p.write_text(s.replace(old, new, 1))
+
+          # execve / execveat: KSU Next v1.1.1 ksud + sucompat manual hooks
+          p = Path("fs/exec.c")
+          s = p.read_text()
+          decl_anchor = """static int do_execveat_common(int fd, struct filename *filename,
+          			      struct user_arg_ptr argv,
+          			      struct user_arg_ptr envp,
+          			      int flags)
+          {"""
+          decl_new = """#ifdef CONFIG_KSU
+          extern bool ksu_execveat_hook __read_mostly;
+          extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+          				     struct user_arg_ptr *argv,
+          				     struct user_arg_ptr *envp, int *flags);
+          extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+          					 void *argv, void *envp, int *flags);
+          #endif
+
+          static int do_execveat_common(int fd, struct filename *filename,
+          			      struct user_arg_ptr argv,
+          			      struct user_arg_ptr envp,
+          			      int flags)
+          {
+          #ifdef CONFIG_KSU
+          	if (unlikely(ksu_execveat_hook))
+          		ksu_handle_execveat_ksud(&fd, &filename, &argv, &envp, &flags);
+          	ksu_handle_execveat_sucompat(&fd, &filename, &argv, &envp, &flags);
+          #endif"""
+          if "ksu_handle_execveat_ksud(&fd" not in s:
+              if decl_anchor not in s:
+                  raise SystemExit("exec hook anchor not found")
+              s = s.replace(decl_anchor, decl_new, 1)
+              p.write_text(s)
+
+          # faccessat
+          anchor = """SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+          {"""
+          repl = """#ifdef CONFIG_KSU
+          extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
+          				int *mode, int *flags);
+          #endif
+
+          SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+          {
+          #ifdef CONFIG_KSU
+          	ksu_handle_faccessat(&dfd, &filename, &mode, NULL);
+          #endif"""
+          once("fs/open.c", anchor, repl, "faccessat hook")
+
+          # read
+          anchor = """SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+          {"""
+          repl = """#ifdef CONFIG_KSU
+          extern bool ksu_vfs_read_hook __read_mostly;
+          extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr,
+          			       size_t *count_ptr);
+          #endif
+
+          SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+          {
+          #ifdef CONFIG_KSU
+          	if (unlikely(ksu_vfs_read_hook))
+          		ksu_handle_sys_read(fd, &buf, &count);
+          #endif"""
+          once("fs/read_write.c", anchor, repl, "read hook")
+
+          # stat
+          anchor = """SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+          		struct stat __user *, statbuf, int, flag)
+          {"""
+          repl = """#ifdef CONFIG_KSU
+          extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
+          #endif
+
+          SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+          		struct stat __user *, statbuf, int, flag)
+          {
+          #ifdef CONFIG_KSU
+          	ksu_handle_stat(&dfd, &filename, &flag);
+          #endif"""
+          once("fs/stat.c", anchor, repl, "stat hook")
+
+          # input safe-mode hook
+          anchor = """static void input_handle_event(struct input_dev *dev,
+          			       unsigned int type, unsigned int code, int value)
+          {"""
+          repl = """#ifdef CONFIG_KSU
+          extern bool ksu_input_hook __read_mostly;
+          extern int ksu_handle_input_handle_event(unsigned int *type,
+          					unsigned int *code, int *value);
+          #endif
+
+          static void input_handle_event(struct input_dev *dev,
+          			       unsigned int type, unsigned int code, int value)
+          {
+          #ifdef CONFIG_KSU
+          	if (unlikely(ksu_input_hook))
+          		ksu_handle_input_handle_event(&type, &code, &value);
+          #endif"""
+          once("drivers/input/input.c", anchor, repl, "input hook")
+
+          # devpts hook for su compatibility
+          anchor = """static struct tty_struct *pts_unix98_lookup(struct tty_driver *driver,
+          		struct file *file, int idx)
+          {
+          	struct tty_struct *tty;
+
+          	mutex_lock(&devpts_mutex);"""
+          repl = """#ifdef CONFIG_KSU
+          extern int ksu_handle_devpts(struct inode *inode);
+          #endif
+
+          static struct tty_struct *pts_unix98_lookup(struct tty_driver *driver,
+          		struct file *file, int idx)
+          {
+          	struct tty_struct *tty;
+
+          #ifdef CONFIG_KSU
+          	ksu_handle_devpts(file->f_path.dentry->d_inode);
+          #endif
+
+          	mutex_lock(&devpts_mutex);"""
+          once("drivers/tty/pty.c", anchor, repl, "devpts hook")
+          PY
+
+          grep -q 'ksu_handle_execveat_ksud' fs/exec.c
+          grep -q 'ksu_handle_execveat_sucompat' fs/exec.c
+          grep -q 'ksu_handle_faccessat' fs/open.c
+          grep -q 'ksu_handle_sys_read' fs/read_write.c
+          grep -q 'ksu_handle_stat' fs/stat.c
+          grep -q 'ksu_handle_input_handle_event' drivers/input/input.c
+          grep -q 'ksu_handle_devpts' drivers/tty/pty.c
+
+      - name: Apply manual KSU security hooks
+        run: |
+          set -euxo pipefail
+          cd kernel
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("security/security.c")
+          s = p.read_text()
+          anchor = "/* Security operations */"
+          decl = """#ifdef CONFIG_KSU
+          extern int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
+                       unsigned long arg4, unsigned long arg5);
+          extern int ksu_handle_rename(struct dentry *old_dentry, struct dentry *new_dentry);
+          extern int ksu_handle_setuid(struct cred *new, const struct cred *old);
+          #endif
+
+          /* Security operations */"""
+          if "extern int ksu_handle_prctl" not in s:
+              if anchor not in s:
+                  raise SystemExit("security declarations anchor not found")
+              s = s.replace(anchor, decl, 1)
+
+          old = """int security_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
+                     struct inode *new_dir, struct dentry *new_dentry,
+                     unsigned int flags)
+          {"""
+          new = old + """
+          #ifdef CONFIG_KSU
+              ksu_handle_rename(old_dentry, new_dentry);
+          #endif"""
+          if "ksu_handle_rename(old_dentry, new_dentry);" not in s:
+              if old not in s:
+                  raise SystemExit("security rename anchor not found")
+              s = s.replace(old, new, 1)
+
+          old = """int security_task_fix_setuid(struct cred *new, const struct cred *old,
+                       int flags)
+          {"""
+          new = old + """
+          #ifdef CONFIG_KSU
+              ksu_handle_setuid(new, old);
+          #endif"""
+          if "ksu_handle_setuid(new, old);" not in s:
+              if old not in s:
+                  raise SystemExit("security setuid anchor not found")
+              s = s.replace(old, new, 1)
+
+          old = """int security_task_prctl(int option, unsigned long arg2, unsigned long arg3,
+                   unsigned long arg4, unsigned long arg5)
+          {"""
+          new = old + """
+          #ifdef CONFIG_KSU
+              ksu_handle_prctl(option, arg2, arg3, arg4, arg5);
+          #endif"""
+          if "ksu_handle_prctl(option, arg2, arg3, arg4, arg5);" not in s:
+              if old not in s:
+                  raise SystemExit("security prctl anchor not found")
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          grep -q 'ksu_handle_prctl(option' security/security.c
+          grep -q 'ksu_handle_rename(old_dentry' security/security.c
+          grep -q 'ksu_handle_setuid(new, old)' security/security.c
+
+      - name: Configure CahAzzu
+        run: |
+          set -euxo pipefail
+          cd kernel
+          cp arch/arm64/configs/vendor/surya-stock_defconfig .config
+
+          scripts/config --file .config --set-str LOCALVERSION "-CahAzzu"
+          scripts/config --file .config --disable LOCALVERSION_AUTO
+          scripts/config --file .config --enable KSU
+          scripts/config --file .config --disable KSU_KPROBES_HOOK
+          scripts/config --file .config --disable KSU_LSM_SECURITY_HOOKS
+          scripts/config --file .config --set-val LITTLE_CPU_MASK 63
+          scripts/config --file .config --set-val BIG_CPU_MASK 192
+          scripts/config --enable OVERLAY_FS
+
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          make ARCH=arm64 olddefconfig
+
+          grep -q '^CONFIG_LOCALVERSION="-CahAzzu"$' .config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' .config
+          grep -q '^CONFIG_KSU=y$' .config
+          grep -q '^# CONFIG_KSU_LSM_SECURITY_HOOKS is not set
+          grep -q '^CONFIG_OVERLAY_FS=y$' .config
+          grep -q '^# CONFIG_KPROBES is not set$' .config
+          grep -q '^CONFIG_IMG_GZ_DTB=y$' .config
+          cp .config "$GITHUB_WORKSPACE/CahAzzu.config"
+
+      - name: Build CahAzzu Image.gz
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=CahAzzu
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          make -j"$(nproc)" ARCH=arm64 \
+            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Assemble exact QASSA 12-DTB donor tail
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+
+          B64=donor_exact/qassa_donor_12dtb.tail.xz.b64
+          XZ=donor_exact/qassa_donor_12dtb.tail.xz
+          TAIL=donor_exact/qassa_donor_12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -t "$XZ"
+
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_TAIL_SIZE"
+          echo "$EXPECTED_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' donor_exact/FDT_VALIDATION.txt
+
+          IMG_GZ=kernel/arch/arm64/boot/Image.gz
+          IMG=kernel/arch/arm64/boot/Image.gz-dtb
+          test -s "$IMG_GZ"
+          gzip -t "$IMG_GZ"
+          cat "$IMG_GZ" "$TAIL" > "$IMG"
+
+          EXPECTED_SIZE=$(( $(stat -c %s "$IMG_GZ") + DONOR_TAIL_SIZE ))
+          test "$(stat -c %s "$IMG")" = "$EXPECTED_SIZE"
+
+      - name: Validate CahAzzu kernel and exact donor DTB
+        run: |
+          set -euxo pipefail
+          IMG=kernel/arch/arm64/boot/Image.gz-dtb
+          test -s "$IMG"
+          test -s donor_exact/FDT_VALIDATION.txt
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+
+          img = Path("kernel/arch/arm64/boot/Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(img) + d.flush()
+          tail = d.unused_data
+
+          Path("CahAzzu-Image").write_bytes(raw)
+          Path("CahAzzu-dtb-tail.img").write_bytes(tail)
+
+          expected_size = int(os.environ["DONOR_TAIL_SIZE"])
+          expected_sha = os.environ["EXPECTED_DTB_SHA256"]
+          actual_sha = hashlib.sha256(tail).hexdigest()
+
+          print("DTB tail bytes:", len(tail))
+          print("DTB SHA256:", actual_sha)
+
+          if len(tail) != expected_size:
+              raise SystemExit(f"DTB size mismatch: {len(tail)} != {expected_size}")
+          if actual_sha != expected_sha:
+              raise SystemExit(f"DTB mismatch: {actual_sha} != {expected_sha}")
+          PY
+
+          strings CahAzzu-Image | grep -m1 '^Linux version ' | tee kernel-version.txt
+          strings CahAzzu-Image | grep -q '4.14.190-CahAzzu'
+          strings CahAzzu-Image | grep -q '/data/adb/ksud'
+          grep -q 'KernelSU-Next version:' build.log
+          KSU_KERNEL_VERSION="$(grep -oE 'KernelSU-Next version: [0-9]+' build.log | tail -n1 | awk '{print $3}')"
+          test -n "$KSU_KERNEL_VERSION"
+          test "$KSU_KERNEL_VERSION" -ge 12797
+          echo "KernelSU Next kernel-side version: $KSU_KERNEL_VERSION" | tee ksu-kernel-version.txt
+          grep -q 'KernelSU-Next Manager signature hash: 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7' build.log
+          grep -q '^FDT_VALIDATION=PASS$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' donor_exact/FDT_VALIDATION.txt
+
+          cp donor_exact/FDT_VALIDATION.txt FDT_VALIDATION.txt
+          sha256sum "$IMG" CahAzzu-dtb-tail.img | tee compiled-hashes.txt
+
+      - name: Package CahAzzu recovery ZIP
+        run: |
+          set -euxo pipefail
+
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          git -C ak3 checkout --detach e4b1bb25ca2aabcfd57f694a5998d87130701b71
+          rm -rf ak3/.git ak3/.github
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+
+          cp kernel/arch/arm64/boot/Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          ### AnyKernel3
+          properties() { '
+          kernel.string=CahAzzu
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "CahAzzu";
+          ui_print "Poco X3 NFC surya/karna - Android 10";
+          ui_print "KernelSU Next v1.1.1";
+          ui_print "HOOK: MANUAL / KPROBES OFF";
+          ui_print "KSU_UMOUNT: disabled";
+          ui_print "12 DTB QASSA exact donor";
+          ui_print "DTBO: untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+          chmod 755 ak3/anykernel.sh
+
+          cat > ak3/CahAzzu-BUILD-INFO.txt <<EOF
+          Kernel name: CahAzzu
+          Device: Poco X3 NFC surya / karna
+          Android: 10
+          Kernel: Linux 4.14.190
+          Source commit: $KERNEL_COMMIT
+          Defconfig Git blob: $EXPECTED_DEFCONFIG_BLOB
+          KernelSU Next: $KSU_TAG
+          KernelSU Next commit: $KSU_COMMIT
+          Manager signature: 79e590113c4c4c0c222978e413a5faa801666957b1212a328e46c00c69821bf7
+          Hook mode: manual
+          KPROBES: disabled
+          KSU_UMOUNT: disabled
+          Toolchain: Proton Clang 13
+          Toolchain commit: $TC_COMMIT
+          DTB mode: exact validated QASSA 12-DTB donor tail
+          DTB SHA256: $EXPECTED_DTB_SHA256
+          DTBO: untouched
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          if unzip -l "$ZIP_NAME" | grep -q 'dtbo.img'; then
+            echo "ERROR: DTBO must remain untouched"
+            exit 1
+          fi
+          unzip -p "$ZIP_NAME" anykernel.sh | grep -q 'kernel.string=4.14.190-CahAzzu'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload final CahAzzu
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu
+          path: |
+            CahAzzu.zip
+            CahAzzu.zip.sha256
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+          if-no-files-found: error
