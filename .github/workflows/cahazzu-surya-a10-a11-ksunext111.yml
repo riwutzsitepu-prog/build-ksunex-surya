@@ -43,11 +43,11 @@ jobs:
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "${{ matrix.source_sha }}"
 
-      - name: Fetch Proton Clang 13
+      - name: Verify GCC cross toolchain
         run: |
           set -euxo pipefail
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git proton-clang
-          proton-clang/bin/clang --version | head -n 1
+          aarch64-linux-gnu-gcc --version | head -n 1
+          arm-linux-gnueabi-gcc --version | head -n 1
 
       - name: Integrate KernelSU Next v1.1.1
         working-directory: kernel
@@ -64,17 +64,8 @@ jobs:
           KBUILD_BUILD_HOST: CahAzzu
         run: |
           set -euxo pipefail
-          export PATH="$PATH:$GITHUB_WORKSPACE/proton-clang/bin"
           COMMON=(
             O=out ARCH=arm64
-            CC="$GITHUB_WORKSPACE/proton-clang/bin/clang"
-            LD="$GITHUB_WORKSPACE/proton-clang/bin/ld.lld"
-            AR="$GITHUB_WORKSPACE/proton-clang/bin/llvm-ar"
-            NM="$GITHUB_WORKSPACE/proton-clang/bin/llvm-nm"
-            OBJCOPY="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objcopy"
-            OBJDUMP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objdump"
-            STRIP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-strip"
-            READELF="$GITHUB_WORKSPACE/proton-clang/bin/llvm-readelf"
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             DTC_EXT=/usr/bin/dtc
@@ -89,8 +80,8 @@ jobs:
           scripts/config --file out/.config -d KSU_DEBUG
           scripts/config --file out/.config -e OVERLAY_FS
           if [ "${{ matrix.variant }}" = "a10" ]; then
-            scripts/config --file out/.config -d CC_STACKPROTECTOR_STRONG
-            scripts/config --file out/.config -e CC_STACKPROTECTOR_REGULAR
+            scripts/config --file out/.config -d CC_STACKPROTECTOR_REGULAR
+            scripts/config --file out/.config -e CC_STACKPROTECTOR_STRONG
           fi
           make "${COMMON[@]}" olddefconfig
 
@@ -101,8 +92,8 @@ jobs:
           grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' out/.config
           grep -Fx '# CONFIG_LOCALVERSION_AUTO is not set' out/.config
           if [ "${{ matrix.variant }}" = "a10" ]; then
-            grep -Fx 'CONFIG_CC_STACKPROTECTOR_REGULAR=y' out/.config
-            grep -Fx '# CONFIG_CC_STACKPROTECTOR_STRONG is not set' out/.config
+            grep -Fx 'CONFIG_CC_STACKPROTECTOR_STRONG=y' out/.config
+            grep -Fx '# CONFIG_CC_STACKPROTECTOR_REGULAR is not set' out/.config
           fi
 
       - name: Build CahAzzu
@@ -112,17 +103,8 @@ jobs:
           KBUILD_BUILD_HOST: CahAzzu
         run: |
           set -o pipefail
-          export PATH="$PATH:$GITHUB_WORKSPACE/proton-clang/bin"
           COMMON=(
             O=out ARCH=arm64
-            CC="$GITHUB_WORKSPACE/proton-clang/bin/clang"
-            LD="$GITHUB_WORKSPACE/proton-clang/bin/ld.lld"
-            AR="$GITHUB_WORKSPACE/proton-clang/bin/llvm-ar"
-            NM="$GITHUB_WORKSPACE/proton-clang/bin/llvm-nm"
-            OBJCOPY="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objcopy"
-            OBJDUMP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-objdump"
-            STRIP="$GITHUB_WORKSPACE/proton-clang/bin/llvm-strip"
-            READELF="$GITHUB_WORKSPACE/proton-clang/bin/llvm-readelf"
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             DTC_EXT=/usr/bin/dtc
