@@ -25,18 +25,22 @@ if "extern int ksu_handle_prctl" not in s:
         raise SystemExit("security declarations anchor not found")
     s = s.replace(decl_anchor, decl, 1)
 
-old = """int security_inode_rename(struct inode *old_dir, struct dentry *old_dentry,
-                          struct inode *new_dir, struct dentry *new_dentry,
-                          unsigned int flags)
-{"""
-new = old + """
+import re
+
+rename_pat = re.compile(
+    r"(int security_inode_rename\(struct inode \*old_dir, struct dentry \*old_dentry,\s*"
+    r"struct inode \*new_dir, struct dentry \*new_dentry,\s*"
+    r"unsigned int flags\)\s*\{)"
+)
+if "ksu_handle_rename(old_dentry, new_dentry);" not in s:
+    m = rename_pat.search(s)
+    if not m:
+        raise SystemExit("security rename anchor not found")
+    hook = m.group(1) + """
 #ifdef CONFIG_KSU
     ksu_handle_rename(old_dentry, new_dentry);
 #endif"""
-if "ksu_handle_rename(old_dentry, new_dentry);" not in s:
-    if old not in s:
-        raise SystemExit("security rename anchor not found")
-    s = s.replace(old, new, 1)
+    s = s[:m.start()] + hook + s[m.end():]
 
 old = """int security_task_fix_setuid(struct cred *new, const struct cred *old,
                              int flags)
