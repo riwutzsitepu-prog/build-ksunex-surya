@@ -300,49 +300,25 @@ jobs:
           test -s arch/arm64/boot/Image.gz
           gzip -t arch/arm64/boot/Image.gz
 
-      - name: Assemble exact QASSA DTB tail
+      - name: Stage native 4.14.190 kernel image
         run: |
           set -euxo pipefail
-          PART_DIR=donor_repo/staging_exact_final
-          mkdir -p donor_exact
-          B64=donor_exact/qassa.tail.xz.b64
-          XZ=donor_exact/qassa.tail.xz
-          TAIL=donor_exact/qassa.tail
+          cp kernel/arch/arm64/boot/Image.gz Image.gz
+          test -s Image.gz
+          gzip -t Image.gz
 
-          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
-          cat "$PART_DIR"/part* > "$B64"
-          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
-          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
-          base64 -d "$B64" > "$XZ"
-          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
-          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
-          xz -dc "$XZ" > "$TAIL"
-          test "$(stat -c %s "$TAIL")" = "$DONOR_TAIL_SIZE"
-          echo "$EXPECTED_DTB_SHA256  $TAIL" | sha256sum -c -
-
-          python3 donor_repo/verify_test4_donor.py "$TAIL" \
-            --out-dir donor_exact/fdts \
-            --report donor_exact/FDT_VALIDATION.txt
-          grep -Fx 'FDT_VALIDATION=PASS' donor_exact/FDT_VALIDATION.txt
-          grep -Fx 'FDT_COUNT=12' donor_exact/FDT_VALIDATION.txt
-
-          cat kernel/arch/arm64/boot/Image.gz "$TAIL" > Image.gz-dtb
-          test -s Image.gz-dtb
+          # This source/defconfig explicitly uses a non-appended DTB kernel.
+          grep -Fx '# CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE is not set' CahAzzu.config
+          grep -Fx '# CONFIG_BUILD_ARM64_DT_OVERLAY is not set' CahAzzu.config
 
       - name: Validate kernel
         run: |
           set -euxo pipefail
           python3 - <<'PY'
-          import hashlib, os, zlib
+          import gzip
           from pathlib import Path
-          blob = Path("Image.gz-dtb").read_bytes()
-          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-          raw = d.decompress(blob) + d.flush()
-          tail = d.unused_data
+          raw = gzip.decompress(Path("Image.gz").read_bytes())
           Path("CahAzzu-Image").write_bytes(raw)
-          Path("CahAzzu-dtb-tail.img").write_bytes(tail)
-          assert len(tail) == int(os.environ["DONOR_TAIL_SIZE"])
-          assert hashlib.sha256(tail).hexdigest() == os.environ["EXPECTED_DTB_SHA256"]
           PY
 
           strings CahAzzu-Image | grep -m1 '^Linux version ' | tee kernel-version.txt
@@ -355,7 +331,7 @@ jobs:
           test "$KSU_KERNEL_VERSION" -ge 12797
           echo "KernelSU Next kernel-side version: $KSU_KERNEL_VERSION" | tee ksu-kernel-version.txt
 
-          sha256sum Image.gz-dtb CahAzzu-dtb-tail.img | tee compiled-hashes.txt
+          sha256sum Image.gz | tee compiled-hashes.txt
 
       - name: Package CahAzzu
         run: |
@@ -364,8 +340,7 @@ jobs:
           git -C ak3 checkout --detach e4b1bb25ca2aabcfd57f694a5998d87130701b71
           rm -rf ak3/.git ak3/.github
           rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb ak3/dtb.img ak3/dtbo.img
-          cp Image.gz-dtb ak3/Image.gz-dtb
-          cp donor_exact/FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp Image.gz ak3/Image.gz
           cp kernel-version.txt ak3/kernel-version.txt
           cp ksu-kernel-version.txt ak3/ksu-kernel-version.txt
 
@@ -394,7 +369,7 @@ jobs:
           ui_print "Linux 4.14.190";
           ui_print "KernelSU Next v1.1.1";
           ui_print "Manual hooks / KPROBES OFF / NOUMOUNT";
-          ui_print "QASSA exact 12-DTB; DTBO untouched";
+          ui_print "Native 4.14.190 Image.gz; ROM DTB/DTBO untouched";
 
           dump_boot;
           write_boot;
@@ -414,13 +389,42 @@ jobs:
           KSU_UMOUNT: off
           Touchscreen: NT36xxx donor option restored
           Haptics: AW8624 + DRV2624 donor options restored
-          DTB: exact QASSA 12-DTB tail
+          DTB: preserved from installed ROM boot image
           DTBO: untouched
           EOF
 
           (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/CahAzzu.zip" . -x '*.git*' 'README.md' '*placeholder' >/dev/null)
           unzip -tq CahAzzu.zip
-          unzip -l CahAzzu.zip | grep 'Image.gz-dtb'
+          unzip -l CahAzzu.zip | grep -E '(^| )Image.gz          if unzip -l CahAzzu.zip | grep -Eq 'Image.gz-dtb|(^|/)dtb(\.img)?$|dtbo.img'; then
+            echo "DTB/DTBO must remain untouched"
+            exit 1
+          fi
+          sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
+
+      - name: Upload final CahAzzu
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu
+          path: |
+            CahAzzu.zip
+            CahAzzu.zip.sha256
+            kernel-version.txt
+            ksu-kernel-version.txt
+            compiled-hashes.txt
+            CahAzzu.config
+          if-no-files-found: error
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-failure
+          path: |
+            build.log
+            compiler.txt
+            CahAzzu.config
+          if-no-files-found: ignore
+
           if unzip -l CahAzzu.zip | grep -q 'dtbo.img'; then
             echo "DTBO must remain untouched"
             exit 1
