@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   build:
@@ -20,9 +21,6 @@ jobs:
           - variant: a10
             source_sha: fa1df47eb127d03f531917f2b47d6c703361d703
             image_name: Image.gz-dtb
-          - variant: a11
-            source_sha: 99d552248f1facb7c07898f0187732a4eaa4f432
-            image_name: Image.gz
 
     steps:
       - name: Checkout build repo
@@ -90,6 +88,10 @@ jobs:
           scripts/config --file out/.config -e KSU_KPROBES_HOOK
           scripts/config --file out/.config -d KSU_DEBUG
           scripts/config --file out/.config -e OVERLAY_FS
+          if [ "${{ matrix.variant }}" = "a10" ]; then
+            scripts/config --file out/.config -d CC_STACKPROTECTOR_STRONG
+            scripts/config --file out/.config -e CC_STACKPROTECTOR_REGULAR
+          fi
           make "${COMMON[@]}" olddefconfig
 
           grep -Fx 'CONFIG_KSU=y' out/.config
@@ -98,6 +100,10 @@ jobs:
           grep -Fx 'CONFIG_KSU_KPROBES_HOOK=y' out/.config
           grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' out/.config
           grep -Fx '# CONFIG_LOCALVERSION_AUTO is not set' out/.config
+          if [ "${{ matrix.variant }}" = "a10" ]; then
+            grep -Fx 'CONFIG_CC_STACKPROTECTOR_REGULAR=y' out/.config
+            grep -Fx '# CONFIG_CC_STACKPROTECTOR_STRONG is not set' out/.config
+          fi
 
       - name: Build CahAzzu
         working-directory: kernel
@@ -164,11 +170,14 @@ jobs:
           name: CahAzzu-a10
           path: payload/a10
 
-      - name: Download A11 payload
+      - name: Download successful A11 payload from Run #2
         uses: actions/download-artifact@v4
         with:
           name: CahAzzu-a11
           path: payload/a11
+          repository: riwutzsitepu-prog/build-ksunex-surya
+          run-id: 35862783280
+          github-token: ${{ github.token }}
 
       - name: Prepare AnyKernel3 for surya
         run: |
