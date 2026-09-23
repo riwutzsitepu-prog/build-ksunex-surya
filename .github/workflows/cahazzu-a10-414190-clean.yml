@@ -126,7 +126,7 @@ jobs:
           cp arch/arm64/configs/vendor/surya-stock_defconfig .config
           test "$(git hash-object .config)" = "$DEFCONFIG_BLOB"
 
-          scripts/config --file .config -e TOUCHSCREEN_NT36xxx_HOSTDL_SPI
+          scripts/config --file .config --keep-case -e TOUCHSCREEN_NT36xxx_HOSTDL_SPI
           scripts/config --file .config -e AW8624_HAPTIC
           scripts/config --file .config -e DRV2624_HAPTIC
           scripts/config --file .config -e CRYPTO_DEV_QCOM_ICE
