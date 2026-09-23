@@ -112,6 +112,40 @@ jobs:
           grep -Fx 'obj-y += kernelsu.o' KernelSU-Next/kernel/Makefile
           ! grep -q 'ccflags-y += -DKSU_UMOUNT' KernelSU-Next/kernel/Makefile
 
+          # StormBreaker 4.14.190 backports post-flex-array SELinux policydb.
+          # Teach KSU v1.1.1 to use its direct-array path without changing kernel SELinux.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("KernelSU-Next/kernel/selinux/sepolicy.c")
+          s = p.read_text()
+          marker = '#define KSU_SUPPORT_ADD_TYPE'
+          compat = '''#ifdef KSU_SELINUX_DIRECT_ARRAY_BACKPORT
+          #define type_val_to_struct type_val_to_struct_array
+          #endif
+
+          #define KSU_SUPPORT_ADD_TYPE'''
+          if 'KSU_SELINUX_DIRECT_ARRAY_BACKPORT\n#define type_val_to_struct' not in s:
+              if marker not in s:
+                  raise SystemExit("KSU sepolicy marker not found")
+              s = s.replace(marker, compat, 1)
+          old = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)'
+          new = '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0) || defined(KSU_SELINUX_DIRECT_ARRAY_BACKPORT)'
+          if s.count(old) != 2:
+              raise SystemExit(f"unexpected KSU direct-array guard count: {s.count(old)}")
+          s = s.replace(old, new)
+          p.write_text(s)
+
+          m = Path("KernelSU-Next/kernel/Makefile")
+          ms = m.read_text()
+          flag = 'ccflags-y += -DKSU_SELINUX_DIRECT_ARRAY_BACKPORT'
+          if flag not in ms:
+              ms += '\n' + flag + '\n'
+              m.write_text(ms)
+          PY
+          grep -Fq 'defined(KSU_SELINUX_DIRECT_ARRAY_BACKPORT)' KernelSU-Next/kernel/selinux/sepolicy.c
+          grep -Fq '#define type_val_to_struct type_val_to_struct_array' KernelSU-Next/kernel/selinux/sepolicy.c
+          grep -Fx 'ccflags-y += -DKSU_SELINUX_DIRECT_ARRAY_BACKPORT' KernelSU-Next/kernel/Makefile
+
       - name: Apply donor-safe manual hooks
         working-directory: kernel
         run: |
