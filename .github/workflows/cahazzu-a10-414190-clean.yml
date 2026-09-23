@@ -395,38 +395,9 @@ jobs:
 
           (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/CahAzzu.zip" . -x '*.git*' 'README.md' '*placeholder' >/dev/null)
           unzip -tq CahAzzu.zip
-          unzip -l CahAzzu.zip | grep -E '(^| )Image.gz          if unzip -l CahAzzu.zip | grep -Eq 'Image.gz-dtb|(^|/)dtb(\.img)?$|dtbo.img'; then
+          unzip -l CahAzzu.zip | grep -F 'Image.gz'
+          if unzip -l CahAzzu.zip | grep -Eq 'Image.gz-dtb|(^|/)dtb([.]img)?$|dtbo.img'; then
             echo "DTB/DTBO must remain untouched"
-            exit 1
-          fi
-          sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
-
-      - name: Upload final CahAzzu
-        uses: actions/upload-artifact@v4
-        with:
-          name: CahAzzu
-          path: |
-            CahAzzu.zip
-            CahAzzu.zip.sha256
-            kernel-version.txt
-            ksu-kernel-version.txt
-            compiled-hashes.txt
-            CahAzzu.config
-          if-no-files-found: error
-
-      - name: Upload failure diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: CahAzzu-failure
-          path: |
-            build.log
-            compiler.txt
-            CahAzzu.config
-          if-no-files-found: ignore
-
-          if unzip -l CahAzzu.zip | grep -q 'dtbo.img'; then
-            echo "DTBO must remain untouched"
             exit 1
           fi
           sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
