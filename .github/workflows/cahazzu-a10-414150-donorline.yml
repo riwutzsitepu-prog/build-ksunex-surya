@@ -226,6 +226,28 @@ jobs:
           PY
           grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/hid' drivers/hid/hid-trace.h
 
+          # Run #13: fix the two IPA trace headers that fail in the same out-of-tree build.
+          python3 - <<'PY'
+          from pathlib import Path
+          patches = {
+              "drivers/platform/msm/ipa/ipa_v3/ipa_trace.h":
+                  "../../drivers/platform/msm/ipa/ipa_v3",
+              "drivers/platform/msm/ipa/ipa_clients/rndis_ipa_trace.h":
+                  "../../drivers/platform/msm/ipa/ipa_clients",
+          }
+          for name, path in patches.items():
+              p=Path(name)
+              s=p.read_text()
+              old="#define TRACE_INCLUDE_PATH ."
+              new=f"#define TRACE_INCLUDE_PATH {path}"
+              if new not in s:
+                  if old not in s:
+                      raise SystemExit(f"trace include anchor not found: {name}")
+                  p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_v3' drivers/platform/msm/ipa/ipa_v3/ipa_trace.h
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_clients' drivers/platform/msm/ipa/ipa_clients/rndis_ipa_trace.h
+
           # Run #10: legacy HID trace header must use a source-relative include path.
           python3 - <<'PY'
           from pathlib import Path
