@@ -131,17 +131,14 @@ jobs:
 
           p=Path("kernel/cgroup/cpuset.c")
           s=p.read_text()
-          fn='''static ssize_t cpuset_write_resmask_assist(struct kernfs_open_file *of,
-                                           struct cs_target tgt, size_t nbytes,
-                                           loff_t off)
-{
-        pr_info("cpuset_assist: setting %s to %s\\n", tgt.name, tgt.cpus);
-        return cpuset_write_resmask(of, tgt.cpus, nbytes, off);
-}'''
-          if fn in s and "#ifdef CONFIG_CPUSET_ASSIST\n"+fn not in s:
-              s=s.replace(fn,"#ifdef CONFIG_CPUSET_ASSIST\n"+fn+"\n#endif",1)
-          elif "static ssize_t cpuset_write_resmask_assist" not in s:
-              raise SystemExit("cpuset assist helper not found")
+          start=s.find("static ssize_t cpuset_write_resmask_assist")
+          end=s.find("static ssize_t cpuset_write_resmask_wrapper", start)
+          if start < 0 or end < 0:
+              raise SystemExit("cpuset assist helper boundaries not found")
+          prefix=s[max(0,start-64):start]
+          if "#ifdef CONFIG_CPUSET_ASSIST" not in prefix:
+              block=s[start:end]
+              s=s[:start]+"#ifdef CONFIG_CPUSET_ASSIST\\n"+block+"#endif\\n\\n"+s[end:]
           p.write_text(s)
           PY
 
