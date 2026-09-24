@@ -249,7 +249,17 @@ jobs:
             READELF=llvm-readelf \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            Image.gz-dtb dtbo.img 2>&1 | tee ../build.log
+            2>&1 | tee ../build.log
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          echo "===== BUILD DTBO IMAGE (Waifu original method) ====="
+          git clone --depth=1 https://android.googlesource.com/platform/system/libufdt libufdt
+          shopt -s nullglob
+          dtbos=(out/arch/arm64/boot/dts/qcom/*.dtbo)
+          test "${#dtbos[@]}" -gt 0
+          printf 'DTBO fragments: %s\n' "${#dtbos[@]}"
+          python3 libufdt/utils/src/mkdtboimg.py create \
+            out/arch/arm64/boot/dtbo.img --page_size=4096 "${dtbos[@]}"
+          test -s out/arch/arm64/boot/dtbo.img
 
       - name: Validate output
         working-directory: kernel
