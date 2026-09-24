@@ -100,6 +100,56 @@ jobs:
           grep -q 'ksu_handle_execveat_ksud' fs/exec.c
           grep -q 'ksu_handle_prctl' security/security.c
 
+      - name: Resolve donor-line legacy hook collisions
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          p=Path("fs/read_write.c")
+          s=p.read_text()
+
+          # 4.14.150 donor-line contains the old vfs_read KSU API.
+          # KSU Next v1.1.1 manual mode uses the sys_read API instead.
+          old_decl = r'''extern int ksu_handle_vfs_read\(struct file \*\*file_ptr, char __user \*\*buf_ptr,\s*size_t \*count_ptr, loff_t \*\*pos\);'''
+          new_decl = '''extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr,
+                               size_t *count_ptr);'''
+          s,n = re.subn(old_decl,new_decl,s,count=1,flags=re.S)
+          if n != 1 and "extern int ksu_handle_sys_read" not in s:
+              raise SystemExit("old vfs_read declaration not found")
+
+          old_call = r'''#ifdef CONFIG_KSU\s*#ifndef CONFIG_KPROBES\s*if \(unlikely\(ksu_vfs_read_hook\)\)\s*#endif\s*ksu_handle_vfs_read\(&file, &buf, &count, &pos\);\s*#endif'''
+          s,n = re.subn(old_call,"",s,count=1,flags=re.S)
+          if n != 1 and "ksu_handle_vfs_read(&file" in s:
+              raise SystemExit("old vfs_read call not removed")
+
+          if "ksu_handle_sys_read(fd, &buf, &count);" not in s:
+              raise SystemExit("new sys_read hook missing")
+          p.write_text(s)
+
+          p=Path("kernel/cgroup/cpuset.c")
+          s=p.read_text()
+          fn='''static ssize_t cpuset_write_resmask_assist(struct kernfs_open_file *of,
+                                           struct cs_target tgt, size_t nbytes,
+                                           loff_t off)
+{
+        pr_info("cpuset_assist: setting %s to %s\\n", tgt.name, tgt.cpus);
+        return cpuset_write_resmask(of, tgt.cpus, nbytes, off);
+}'''
+          if fn in s and "#ifdef CONFIG_CPUSET_ASSIST\n"+fn not in s:
+              s=s.replace(fn,"#ifdef CONFIG_CPUSET_ASSIST\n"+fn+"\n#endif",1)
+          elif "static ssize_t cpuset_write_resmask_assist" not in s:
+              raise SystemExit("cpuset assist helper not found")
+          p.write_text(s)
+          PY
+
+          ! grep -q 'ksu_handle_vfs_read(&file' fs/read_write.c
+          grep -q 'extern int ksu_handle_sys_read' fs/read_write.c
+          grep -q 'ksu_handle_sys_read(fd, &buf, &count);' fs/read_write.c
+          grep -B1 'static ssize_t cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | grep -q '#ifdef CONFIG_CPUSET_ASSIST'
+
       - name: Configure exact donor defconfig
         working-directory: kernel
         run: |
