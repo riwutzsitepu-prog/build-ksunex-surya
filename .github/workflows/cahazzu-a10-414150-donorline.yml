@@ -202,42 +202,15 @@ jobs:
           from pathlib import Path
           p=Path("kernel/sched/tune.c")
           s=p.read_text()
-          old='''static int prefer_idle_write_wrapper(struct cgroup_subsys_state *css,
-                                     struct cftype *cft, u64 prefer_idle)
-{
-        if (task_is_booster(current))
-                return 0;
-
-        return prefer_idle_write(css, cft, prefer_idle);
-}
-#endif
-'''
-          if old not in s:
-              # tolerate tab/spacing differences by anchoring the closing block.
-              marker='''	return prefer_idle_write(css, cft, prefer_idle);
-}
-#endif
-'''
-              if marker not in s:
+          if "#define boost_write_wrapper boost_write" not in s:
+              old="\treturn prefer_idle_write(css, cft, prefer_idle);\n}\n#endif\n"
+              new="\treturn prefer_idle_write(css, cft, prefer_idle);\n}\n#else\n#define boost_write_wrapper boost_write\n#define prefer_idle_write_wrapper prefer_idle_write\n#endif\n"
+              if old not in s:
                   raise SystemExit("schedtune wrapper anchor not found")
-              repl='''	return prefer_idle_write(css, cft, prefer_idle);
-}
-#else
-#define boost_write_wrapper boost_write
-#define prefer_idle_write_wrapper prefer_idle_write
-#endif
-'''
-              s=s.replace(marker,repl,1)
-          elif '#define boost_write_wrapper boost_write' not in s:
-              repl=old[:-7]+'''#else
-#define boost_write_wrapper boost_write
-#define prefer_idle_write_wrapper prefer_idle_write
-#endif
-'''
-              s=s.replace(old,repl,1)
-          p.write_text(s)
+              s=s.replace(old,new,1)
+              p.write_text(s)
           PY
-          grep -A5 -F '#define boost_write_wrapper boost_write' kernel/sched/tune.c | grep -F '#define prefer_idle_write_wrapper prefer_idle_write'
+          grep -A2 -F '#define boost_write_wrapper boost_write' kernel/sched/tune.c | grep -F '#define prefer_idle_write_wrapper prefer_idle_write'
 
       - name: Configure exact donor defconfig
         working-directory: kernel
