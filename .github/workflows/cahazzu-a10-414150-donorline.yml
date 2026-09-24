@@ -137,16 +137,17 @@ jobs:
           fn_start=s.find("static int do_execveat_common", decl_start)
           if decl_start < 0 or fn_start < 0:
               raise SystemExit("exec KSU declaration block not found")
-          decl=(
-              "#ifdef CONFIG_KSU\\n"
-              "extern bool ksu_execveat_hook __read_mostly;\\n"
-              "extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,\\n"
-              "                                    struct user_arg_ptr *argv,\\n"
-              "                                    struct user_arg_ptr *envp, int *flags);\\n"
-              "extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,\\n"
-              "                                        void *argv, void *envp, int *flags);\\n"
-              "#endif\\n"
-          )
+          NL=chr(10)
+          decl=NL.join([
+              "#ifdef CONFIG_KSU",
+              "extern bool ksu_execveat_hook __read_mostly;",
+              "extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,",
+              "                                    struct user_arg_ptr *argv,",
+              "                                    struct user_arg_ptr *envp, int *flags);",
+              "extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,",
+              "                                        void *argv, void *envp, int *flags);",
+              "#endif",
+          ])+NL
           s=s[:decl_start]+decl+s[fn_start:]
 
           # Remove the second, legacy exec hook block inside do_execveat_common.
@@ -167,7 +168,7 @@ jobs:
           prefix=s[max(0,start-64):start]
           if "#ifdef CONFIG_CPUSET_ASSIST" not in prefix:
               block=s[start:end]
-              s=s[:start]+"#ifdef CONFIG_CPUSET_ASSIST\\n"+block+"#endif\\n\\n"+s[end:]
+              s=s[:start]+"#ifdef CONFIG_CPUSET_ASSIST"+NL+block+"#endif"+NL+NL+s[end:]
           p.write_text(s)
           PY
 
