@@ -76,6 +76,20 @@ jobs:
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           printf '\nobj-y += kernelsu/\n' >> drivers/Makefile
 
+          # Run #14: the donor-line tree already carries a second KernelSUNext
+          # under drivers/misc. Keep only our exact KSU Next v1.1.1 integration.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/misc/Makefile")
+          lines=p.read_text().splitlines()
+          kept=[line for line in lines if "KernelSUNext/" not in line]
+          if len(kept) == len(lines):
+              raise SystemExit("built-in KernelSUNext Makefile entry not found")
+          p.write_text("\n".join(kept)+"\n")
+          PY
+          ! grep -q 'KernelSUNext/' drivers/misc/Makefile
+          grep -Fx 'obj-y += kernelsu/' drivers/Makefile
+
           python3 - <<'PY'
           from pathlib import Path
           p=Path("KernelSU-Next/kernel/Makefile")
