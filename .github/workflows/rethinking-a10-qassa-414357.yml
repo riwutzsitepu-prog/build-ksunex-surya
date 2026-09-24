@@ -1,0 +1,226 @@
+name: Rethinking 4.14.357 A10 QASSA DTBAPPEND
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rethinking-a10-qassa-414357.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    env:
+      KERNEL_REPO: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya.git
+      KERNEL_COMMIT: e5a52193a1015217595bee0ac70711077d824069
+      DONOR_REPO: riwutzsitepu-prog/trial-kernel
+      DONOR_REF: aa24e82bacd6ccaf9bca7937a7e2ad99867ab5ad
+      DONOR_B64_SHA256: 6c7b01b3379bb1bf86e0652986ba41dfdbf85e2d959e812e4898f4cff445c9ae
+      DONOR_B64_SIZE: '167296'
+      DONOR_XZ_SHA256: edf5031085d2ba244f92b809cb231f702e2a64db1d4ef88f40fab907bf521200
+      DONOR_XZ_SIZE: '125472'
+      DONOR_DTB_SHA256: 8eb391b228f59ffc98885fcb2101cc2f49965de3e7e4aba5ba864158e43b31e1
+      DONOR_DTB_SIZE: '2092004'
+      ZIP_NAME: Rethinking-4.14.357-KSU-Surya-A10-QASSA-DTBAPPEND.zip
+      TAG_NAME: rethinking-a10-qassa-414357-dtbappend-v1
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
+      - name: Checkout exact QASSA donor DTB data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DONOR_REPO }}
+          ref: ${{ env.DONOR_REF }}
+          path: donor_repo
+
+      - name: Install build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl device-tree-compiler \
+            file flex git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            libelf-dev libssl-dev make python3 python-is-python3 rsync \
+            unzip wget xz-utils zip zstd
+
+      - name: Clone exact Rethinking source
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -q '^VERSION = 4$' Makefile
+          grep -q '^PATCHLEVEL = 14$' Makefile
+          grep -q '^SUBLEVEL = 357$' Makefile
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/source-sha.txt"
+
+      - name: Build original SnowCone KSU Image.gz
+        run: |
+          set -euxo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/upstream_artifact"
+          cd kernel
+          chmod +x build.sh
+          ./build.sh SnowCone KSU Q10TEST "$GITHUB_WORKSPACE/upstream_artifact" 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          test -s out/arch/arm64/boot/Image.gz
+          gzip -t out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^# CONFIG_CAMERA_BOOTCLOCK_TIMESTAMP is not set$' out/.config
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-snowcone-ksu.config"
+
+      - name: Reconstruct exact QASSA 12-DTB donor tail
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+          B64=donor_exact/qassa-12dtb.tail.xz.b64
+          XZ=donor_exact/qassa-12dtb.tail.xz
+          TAIL=donor_exact/qassa-12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_DTB_SIZE"
+          echo "$DONOR_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' donor_exact/FDT_VALIDATION.txt
+          cp donor_exact/FDT_VALIDATION.txt "$GITHUB_WORKSPACE/FDT_VALIDATION.txt"
+
+      - name: Assemble Android 10 Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz donor_exact/qassa-12dtb.tail > Image.gz-dtb
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          data = Path("Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(data) + d.flush()
+          tail = d.unused_data
+          if len(tail) != int(os.environ["DONOR_DTB_SIZE"]):
+              raise SystemExit(f"wrong DTB tail size: {len(tail)}")
+          if hashlib.sha256(tail).hexdigest() != os.environ["DONOR_DTB_SHA256"]:
+              raise SystemExit("wrong DTB tail hash")
+          Path("Image.raw").write_bytes(raw)
+          Path("qassa-12dtb.tail").write_bytes(tail)
+          PY
+          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb qassa-12dtb.tail | tee compiled-hashes.txt
+
+      - name: Package donor-style AnyKernel3
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          git -C ak3 checkout --detach e4b1bb25ca2aabcfd57f694a5998d87130701b71
+          rm -rf ak3/.git ak3/.github
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp source-sha.txt ak3/source-sha.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          ### AnyKernel3
+          properties() { '
+          kernel.string=Rethinking 4.14.357 KSU | Surya | Android 10 QASSA
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 KSU - Android 10 QASSA";
+          ui_print "Exact source e5a52193";
+          ui_print "Exact QASSA donor 12-DTB appended";
+          ui_print "DTBO partition untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+          chmod 755 ak3/anykernel.sh
+
+          cat > ak3/RIWUTZ-Q10-INFO.txt <<EOF
+          Kernel source: $KERNEL_REPO
+          Source commit: $KERNEL_COMMIT
+          Kernel base: original Rethinking SnowCone KSU config
+          Android target: 10 / QASSA
+          Image format: Image.gz-dtb
+          DTB source: exact known-working QASSA donor 12-DTB tail
+          DTB SHA256: $DONOR_DTB_SHA256
+          DTBO partition: untouched
+          Purpose: isolate/fix Poco-logo bootloop caused by SnowCone DTB/image layout.
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          ! unzip -l "$ZIP_NAME" | grep -q 'dtbo.img'
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qassa-414357-dtbappend
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-snowcone-ksu.config
+            source-sha.txt
+
+      - name: Publish test release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU A10 QASSA DTBAPPEND
+          prerelease: true
+          body: |
+            Android 10 QASSA compatibility test for Rethinking 4.14.357 KSU.
+            Uses the exact Rethinking source commit from the supplied 202604212227 build.
+            Keeps the kernel source/config as SnowCone KSU but replaces the image layout with
+            Image.gz-dtb using the exact known-working QASSA 12-DTB donor tail.
+            DTBO is deliberately not flashed.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            source-sha.txt
+          fail_on_unmatched_files: true
