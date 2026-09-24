@@ -1,0 +1,203 @@
+name: Rethinking 4.14.357 A10 QASSA FASTPACK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rethinking-a10-qassa-414357-fastpack.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    env:
+      OFFICIAL_URL: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya/releases/download/202604212227/rethinking-SnowCone-KSU-202604212227.zip
+      OFFICIAL_SHA256: 4ab84eb1508f60917249ed5192b06b3238e8a795dd868ffba3943a993f19a55d
+      DONOR_REPO: riwutzsitepu-prog/trial-kernel
+      DONOR_REF: aa24e82bacd6ccaf9bca7937a7e2ad99867ab5ad
+      DONOR_B64_SHA256: 6c7b01b3379bb1bf86e0652986ba41dfdbf85e2d959e812e4898f4cff445c9ae
+      DONOR_B64_SIZE: '167296'
+      DONOR_XZ_SHA256: edf5031085d2ba244f92b809cb231f702e2a64db1d4ef88f40fab907bf521200
+      DONOR_XZ_SIZE: '125472'
+      DONOR_DTB_SHA256: 8eb391b228f59ffc98885fcb2101cc2f49965de3e7e4aba5ba864158e43b31e1
+      DONOR_DTB_SIZE: '2092004'
+      ZIP_NAME: Rethinking-4.14.357-KSU-Surya-A10-QASSA-DTBAPPEND-FAST.zip
+      TAG_NAME: rethinking-a10-qassa-414357-fastpack-v1
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
+      - name: Checkout exact QASSA donor DTB data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DONOR_REPO }}
+          ref: ${{ env.DONOR_REF }}
+          path: donor_repo
+
+      - name: Install tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends unzip xz-utils zip python3 wget
+
+      - name: Fetch exact official Rethinking SnowCone KSU
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress "$OFFICIAL_URL" -O official.zip
+          echo "$OFFICIAL_SHA256  official.zip" | sha256sum -c -
+          unzip -tq official.zip
+          unzip -p official.zip kernels/Image.gz > Image.gz
+          test -s Image.gz
+          gzip -t Image.gz
+          sha256sum Image.gz | tee original-image-sha256.txt
+          unzip -p official.zip anykernel.sh > official-anykernel.sh
+          grep -q 'supported.versions=11-12' official-anykernel.sh
+
+      - name: Reconstruct and validate exact QASSA 12-DTB tail
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+          B64=donor_exact/qassa-12dtb.tail.xz.b64
+          XZ=donor_exact/qassa-12dtb.tail.xz
+          TAIL=donor_exact/qassa-12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_DTB_SIZE"
+          echo "$DONOR_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' FDT_VALIDATION.txt
+
+      - name: Assemble and validate QASSA Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz donor_exact/qassa-12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          data = Path("Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(data) + d.flush()
+          tail = d.unused_data
+          assert len(tail) == int(os.environ["DONOR_DTB_SIZE"]), len(tail)
+          assert hashlib.sha256(tail).hexdigest() == os.environ["DONOR_DTB_SHA256"]
+          Path("Image.raw").write_bytes(raw)
+          Path("verified-dtb-tail.img").write_bytes(tail)
+          PY
+
+          strings Image.raw | grep -m1 '^Linux version ' | tee kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb verified-dtb-tail.img | tee compiled-hashes.txt
+
+      - name: Package Android 10 donor-style AnyKernel
+        run: |
+          set -euxo pipefail
+          rm -rf ak3
+          unzip -q official.zip -d ak3
+          rm -rf ak3/META-INF
+          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          mkdir -p ak3
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          ### AnyKernel3
+          properties() { '
+          kernel.string=Rethinking 4.14.357 KSU | Android 10 QASSA | 12-DTB
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 KSU";
+          ui_print "Poco X3 NFC surya/karna - Android 10 QASSA";
+          ui_print "Official SnowCone kernel binary";
+          ui_print "Exact known-working QASSA 12-DTB appended";
+          ui_print "DTBO partition untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+          chmod 755 ak3/anykernel.sh
+
+          cat > ak3/RIWUTZ-Q10-INFO.txt <<EOF
+          Official asset: rethinking-SnowCone-KSU-202604212227.zip
+          Official asset SHA256: $OFFICIAL_SHA256
+          Kernel: Linux 4.14.357 Rethinking KSU
+          Android target: 10 / QASSA
+          Image layout: Image.gz-dtb
+          DTB: exact known-working QASSA 12-FDT tail
+          DTB SHA256: $DONOR_DTB_SHA256
+          DTBO: not included / not flashed
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qassa-414357-fastpack
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            original-image-sha256.txt
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU A10 QASSA 12-DTB FASTPACK
+          prerelease: true
+          body: |
+            Android 10 QASSA test using the exact official Rethinking SnowCone KSU binary.
+            Official ZIP digest verified before extraction.
+            Kernel Image.gz is unchanged; only the exact known-working QASSA 12-DTB tail is appended.
+            No dtb.img or dtbo.img is flashed separately.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            original-image-sha256.txt
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+          fail_on_unmatched_files: true
