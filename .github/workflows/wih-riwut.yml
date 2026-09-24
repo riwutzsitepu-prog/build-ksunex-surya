@@ -1,0 +1,281 @@
+name: Build Wih-Riwut KSUNext v1.1.1
+
+on:
+  push:
+    branches:
+      - wih-riwut-v1.1.1
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential curl flex git libelf-dev libssl-dev \
+            python3 unzip wget zip zstd gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Clone exact Waifu A10 source
+        run: |
+          git clone --depth=1 --branch surya https://github.com/y82t2z/Waifu-Kernel-A10.git kernel
+          cd kernel
+          git rev-parse HEAD
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' Makefile
+          test "$(awk '/^VERSION =/{print $3}' Makefile)" = "4"
+          test "$(awk '/^PATCHLEVEL =/{print $3}' Makefile)" = "14"
+          test "$(awk '/^SUBLEVEL =/{print $3}' Makefile)" = "117"
+
+      - name: Integrate KernelSU Next v1.1.1
+        working-directory: kernel
+        run: |
+          curl -LSs https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh | bash -s v1.1.1
+          test -L drivers/kernelsu
+          test -f KernelSU-Next/kernel/ksu.c
+          git -C KernelSU-Next describe --tags --exact-match
+          grep -q 'int ksu_handle_execveat' KernelSU-Next/kernel/ksu.c
+          grep -q 'int ksu_handle_faccessat' KernelSU-Next/kernel/sucompat.c
+          grep -q 'int ksu_handle_stat' KernelSU-Next/kernel/sucompat.c
+          grep -q 'int ksu_handle_sys_read' KernelSU-Next/kernel/ksud.c
+
+      - name: Apply Wih-Riwut legacy manual hooks
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(path):
+              return Path(path).read_text()
+
+          def write(path, data):
+              Path(path).write_text(data)
+
+          def replace_once(path, old, new, label):
+              data = read(path)
+              if new in data:
+                  print(f"{label}: already present")
+                  return
+              if old not in data:
+                  raise SystemExit(f"{label}: anchor not found in {path}")
+              data = data.replace(old, new, 1)
+              write(path, data)
+              print(f"{label}: patched")
+
+          # Keep Waifu 4.14.117 base; only custom release label is Wih-Riwut.
+          cfg = Path("arch/arm64/configs/surya-perf_defconfig")
+          data = cfg.read_text()
+          data = re.sub(r'^CONFIG_LOCALVERSION=.*$', 'CONFIG_LOCALVERSION="-Wih-Riwut"', data, flags=re.M)
+          data = re.sub(r'^CONFIG_LOCALVERSION_AUTO=.*$', 'CONFIG_LOCALVERSION_AUTO=n', data, flags=re.M)
+          data = re.sub(r'^# CONFIG_LOCALVERSION_AUTO is not set$', 'CONFIG_LOCALVERSION_AUTO=n', data, flags=re.M)
+          data = re.sub(r'^(?:CONFIG_KSU=.*|# CONFIG_KSU is not set|CONFIG_KSU_KPROBES_HOOK=.*|# CONFIG_KSU_KPROBES_HOOK is not set|CONFIG_KSU_LSM_SECURITY_HOOKS=.*|# CONFIG_KSU_LSM_SECURITY_HOOKS is not set)\n?', '', data, flags=re.M)
+          data += '\n# Wih-Riwut / KernelSU Next v1.1.1 legacy manual hook\n'
+          data += 'CONFIG_KSU=y\n'
+          data += '# CONFIG_KSU_KPROBES_HOOK is not set\n'
+          data += 'CONFIG_KSU_LSM_SECURITY_HOOKS=y\n'
+          cfg.write_text(data)
+
+          # exec.c: manual hook in the common path catches native, compat and execveat.
+          replace_once(
+              "fs/exec.c",
+              "static int do_execveat_common(int fd, struct filename *filename,\n",
+              "#ifdef CONFIG_KSU\n"
+              "__attribute__((hot))\n"
+              "extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,\n"
+              "\t\t\t\tvoid *argv, void *envp, int *flags);\n"
+              "#endif\n\n"
+              "static int do_execveat_common(int fd, struct filename *filename,\n",
+              "exec declaration"
+          )
+          replace_once(
+              "fs/exec.c",
+              "\tint retval;\n\n\tif (IS_ERR(filename))",
+              "\tint retval;\n\n"
+              "#ifdef CONFIG_KSU\n"
+              "\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n"
+              "#endif\n\n"
+              "\tif (IS_ERR(filename))",
+              "exec hook"
+          )
+
+          # faccessat su-compat hook.
+          replace_once(
+              "fs/open.c",
+              "/*\n * access() needs to use the real uid/gid, not the effective uid/gid.\n",
+              "#ifdef CONFIG_KSU\n"
+              "__attribute__((hot))\n"
+              "extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,\n"
+              "\t\t\t\tint *mode, int *flags);\n"
+              "#endif\n\n"
+              "/*\n * access() needs to use the real uid/gid, not the effective uid/gid.\n",
+              "faccess declaration"
+          )
+          replace_once(
+              "fs/open.c",
+              "\tunsigned int lookup_flags = LOOKUP_FOLLOW;\n\n\tif (mode & ~S_IRWXO)",
+              "\tunsigned int lookup_flags = LOOKUP_FOLLOW;\n\n"
+              "#ifdef CONFIG_KSU\n"
+              "\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n"
+              "#endif\n\n"
+              "\tif (mode & ~S_IRWXO)",
+              "faccess hook"
+          )
+
+          # read hook used by ksud/init.rc handling.
+          replace_once(
+              "fs/read_write.c",
+              "SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)\n",
+              "#ifdef CONFIG_KSU\n"
+              "extern bool ksu_vfs_read_hook __read_mostly;\n"
+              "extern __attribute__((cold)) int ksu_handle_sys_read(unsigned int fd,\n"
+              "\t\t\t\tchar __user **buf_ptr, size_t *count_ptr);\n"
+              "#endif\n\n"
+              "SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)\n",
+              "read declaration"
+          )
+          replace_once(
+              "fs/read_write.c",
+              "\tssize_t ret = -EBADF;\n\n\tif (f.file) {",
+              "\tssize_t ret = -EBADF;\n\n"
+              "#ifdef CONFIG_KSU\n"
+              "\tif (unlikely(ksu_vfs_read_hook))\n"
+              "\t\tksu_handle_sys_read(fd, &buf, &count);\n"
+              "#endif\n\n"
+              "\tif (f.file) {",
+              "read hook"
+          )
+
+          # newfstatat su-compat hook.
+          replace_once(
+              "fs/stat.c",
+              "#if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)\n",
+              "#ifdef CONFIG_KSU\n"
+              "__attribute__((hot))\n"
+              "extern int ksu_handle_stat(int *dfd, const char __user **filename_user,\n"
+              "\t\t\t\tint *flags);\n"
+              "#endif\n\n"
+              "#if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)\n",
+              "stat declaration"
+          )
+          replace_once(
+              "fs/stat.c",
+              "\tstruct kstat stat;\n\tint error;\n\n\terror = vfs_fstatat(dfd, filename, &stat, flag);",
+              "\tstruct kstat stat;\n\tint error;\n\n"
+              "#ifdef CONFIG_KSU\n"
+              "\tksu_handle_stat(&dfd, &filename, &flag);\n"
+              "#endif\n"
+              "\terror = vfs_fstatat(dfd, filename, &stat, flag);",
+              "stat hook"
+          )
+
+          # v1.1.1 does not expose reboot hook in every legacy tree.
+          # Add it only if the selected tag actually contains the symbol.
+          has_reboot = any(
+              "ksu_handle_sys_reboot" in p.read_text(errors="ignore")
+              for p in Path("KernelSU-Next/kernel").rglob("*.[ch]")
+          )
+          if has_reboot:
+              replace_once(
+                  "kernel/reboot.c",
+                  "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,\n",
+                  "#ifdef CONFIG_KSU\n"
+                  "extern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n"
+                  "#endif\n\n"
+                  "SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,\n",
+                  "reboot declaration"
+              )
+              replace_once(
+                  "kernel/reboot.c",
+                  "\tint ret = 0;\n\n\t/* We only trust the superuser with rebooting the system. */",
+                  "\tint ret = 0;\n\n"
+                  "#ifdef CONFIG_KSU\n"
+                  "\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n"
+                  "#endif\n\n"
+                  "\t/* We only trust the superuser with rebooting the system. */",
+                  "reboot hook"
+              )
+          else:
+              print("reboot hook: symbol absent in v1.1.1, intentionally skipped")
+
+          print("Manual hooks applied successfully")
+          PY
+
+      - name: Verify frozen configuration
+        working-directory: kernel
+        run: |
+          grep -E 'CONFIG_LOCALVERSION|CONFIG_KSU|CONFIG_KPROBES|CONFIG_OVERLAY_FS|CONFIG_SECCOMP|CONFIG_SECURITY_SELINUX' arch/arm64/configs/surya-perf_defconfig
+          grep -R -n 'ksu_handle_' fs/exec.c fs/open.c fs/read_write.c fs/stat.c kernel/reboot.c || true
+
+      - name: Download original Waifu compiler
+        working-directory: kernel
+        run: |
+          mkdir -p tc/clang
+          wget -q -c https://github.com/greenforce-project/greenforce_clang/releases/download/26122023/greenforce-clang-12.0.1-26122023-1149.tar.zst -O greenforce.tar.zst
+          tar --use-compress-program=unzstd -xf greenforce.tar.zst -C tc/clang
+          rm -f greenforce.tar.zst
+          tc/clang/bin/clang --version | head -n 2
+
+      - name: Build Wih-Riwut
+        working-directory: kernel
+        env:
+          ARCH: arm64
+          SUBARCH: arm64
+          KBUILD_BUILD_USER: Riwut
+          KBUILD_BUILD_HOST: Wih-Riwut
+        run: |
+          set -o pipefail
+          export PATH="$PWD/tc/clang/bin:$PATH"
+          rm -rf out
+          make O=out ARCH=arm64 surya-perf_defconfig
+          echo "===== FINAL CONFIG CHECK ====="
+          grep -E '^CONFIG_LOCALVERSION=|^CONFIG_KSU=|^# CONFIG_KSU_KPROBES_HOOK|^CONFIG_KSU_LSM_SECURITY_HOOKS=|^# CONFIG_KPROBES' out/.config
+          make -j"$(nproc)" O=out \
+            ARCH=arm64 \
+            SUBARCH=arm64 \
+            CC=clang \
+            AR=llvm-ar \
+            LD=ld.lld \
+            NM=llvm-nm \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            OBJCOPY=llvm-objcopy \
+            OBJSIZE=llvm-size \
+            READELF=llvm-readelf \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz-dtb dtbo.img 2>&1 | tee ../build.log
+
+      - name: Validate output
+        working-directory: kernel
+        run: |
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          test -s out/arch/arm64/boot/dtbo.img
+          mkdir -p ../artifact
+          cp out/arch/arm64/boot/Image.gz-dtb ../artifact/
+          cp out/arch/arm64/boot/dtbo.img ../artifact/
+          cp out/.config ../artifact/kernel.config
+          cp ../build.log ../artifact/build.log
+          {
+            echo "Kernel: Wih-Riwut"
+            echo "Base: Waifu 4.14.117"
+            echo "KernelSU Next: v1.1.1"
+            echo "Hook mode: Manual"
+            echo "Source commit: $(git rev-parse HEAD)"
+            echo "Kernel release: $(make -s O=out ARCH=arm64 kernelrelease)"
+            sha256sum out/arch/arm64/boot/Image.gz-dtb out/arch/arm64/boot/dtbo.img
+          } | tee ../artifact/BUILD_INFO.txt
+          strings out/arch/arm64/boot/Image.gz-dtb | grep -m1 '4.14.117-Wih-Riwut' || true
+
+      - name: Upload compiled kernel files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wih-Riwut
+          path: artifact/*
+          if-no-files-found: error
+          compression-level: 0
