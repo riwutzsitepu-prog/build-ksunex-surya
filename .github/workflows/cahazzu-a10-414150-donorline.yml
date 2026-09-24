@@ -180,6 +180,22 @@ jobs:
           grep -q 'ksu_handle_execveat_ksud(&fd' fs/exec.c
           grep -B1 'static ssize_t cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | grep -q '#ifdef CONFIG_CPUSET_ASSIST'
 
+          # Run #7: restore the missing Qualcomm scheduler local CPU declaration.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("kernel/sched/fair.c")
+          s=p.read_text()
+          fn="void check_for_migration(struct rq *rq, struct task_struct *p)\n{\n"
+          old=fn+"\tint active_balance;\n\tint new_cpu = -1;\n\tint prev_cpu = task_cpu(p);"
+          new=fn+"\tint active_balance;\n\tint new_cpu = -1;\n\tint cpu = smp_processor_id();\n\tint prev_cpu = task_cpu(p);"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("scheduler migration anchor not found")
+              s=s.replace(old,new,1)
+              p.write_text(s)
+          PY
+          grep -A6 -F 'void check_for_migration(struct rq *rq, struct task_struct *p)' kernel/sched/fair.c | grep -F 'int cpu = smp_processor_id();'
+
       - name: Configure exact donor defconfig
         working-directory: kernel
         run: |
