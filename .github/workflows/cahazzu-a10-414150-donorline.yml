@@ -107,6 +107,12 @@ jobs:
           cp arch/arm64/configs/Surya-stock_defconfig .config
           test "$(git hash-object .config)" = "$DEFCONFIG_BLOB"
 
+          # Same donor-required topology values used by the known QASSA donor reproduction.
+          sed -i 's/^CONFIG_LITTLE_CPU_MASK=$/CONFIG_LITTLE_CPU_MASK=63/' .config
+          sed -i 's/^CONFIG_BIG_CPU_MASK=$/CONFIG_BIG_CPU_MASK=192/' .config
+          scripts/config --file .config --set-val LITTLE_CPU_MASK 63
+          scripts/config --file .config --set-val BIG_CPU_MASK 192
+
           scripts/config --file .config --set-str LOCALVERSION "-CahAzzu"
           scripts/config --file .config -d LOCALVERSION_AUTO
 
@@ -117,6 +123,8 @@ jobs:
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           make ARCH=arm64 olddefconfig
 
+          grep -Fx 'CONFIG_LITTLE_CPU_MASK=63' .config
+          grep -Fx 'CONFIG_BIG_CPU_MASK=192' .config
           grep -Fx '# CONFIG_KPROBES is not set' .config
           grep -Fx 'CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y' .config
           grep -Fx 'CONFIG_IMG_GZ_DTB=y' .config
