@@ -226,6 +226,20 @@ jobs:
           PY
           grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/hid' drivers/hid/hid-trace.h
 
+          # Run #11: legacy Qualcomm camera trace header include path.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/media/platform/msm/camera/cam_utils/cam_trace.h")
+          s=p.read_text()
+          old="#define TRACE_INCLUDE_PATH ."
+          new="#define TRACE_INCLUDE_PATH ../../drivers/media/platform/msm/camera/cam_utils"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("camera trace include anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/media/platform/msm/camera/cam_utils' drivers/media/platform/msm/camera/cam_utils/cam_trace.h
+
       - name: Configure exact donor defconfig
         working-directory: kernel
         run: |
