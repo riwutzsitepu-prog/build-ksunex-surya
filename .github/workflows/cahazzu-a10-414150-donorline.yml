@@ -129,6 +129,34 @@ jobs:
               raise SystemExit("new sys_read hook missing")
           p.write_text(s)
 
+          p=Path("fs/exec.c")
+          s=p.read_text()
+
+          # Replace the donor-line old execve KSU API with v1.1.1 declarations.
+          decl_start=s.find("#ifdef CONFIG_KSU", s.find("sys_execve() executes"))
+          fn_start=s.find("static int do_execveat_common", decl_start)
+          if decl_start < 0 or fn_start < 0:
+              raise SystemExit("exec KSU declaration block not found")
+          decl='''#ifdef CONFIG_KSU
+extern bool ksu_execveat_hook __read_mostly;
+extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+                                    struct user_arg_ptr *argv,
+                                    struct user_arg_ptr *envp, int *flags);
+extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                        void *argv, void *envp, int *flags);
+#endif
+'''
+          s=s[:decl_start]+decl+s[fn_start:]
+
+          # Remove the second, legacy exec hook block inside do_execveat_common.
+          legacy=re.compile(r'''#ifdef CONFIG_KSU\s*#ifndef CONFIG_KPROBES\s*if \(unlikely\(ksu_execveat_hook\)\)\s*ksu_handle_execveat\(&fd, &filename, &argv, &envp, &flags\);\s*else\s*ksu_handle_execveat_sucompat\(&fd, &filename, &argv, &envp, &flags\);\s*#else\s*ksu_handle_execveat\(&fd, &filename, &argv, &envp, &flags\);\s*#endif\s*#endif''',re.S)
+          s,n=legacy.subn("",s,count=1)
+          if n != 1 and "ksu_handle_execveat(&fd" in s:
+              raise SystemExit("legacy exec hook block not removed")
+          if "ksu_handle_execveat_ksud(&fd" not in s:
+              raise SystemExit("v1.1.1 exec hook missing")
+          p.write_text(s)
+
           p=Path("kernel/cgroup/cpuset.c")
           s=p.read_text()
           start=s.find("static ssize_t cpuset_write_resmask_assist")
@@ -145,6 +173,9 @@ jobs:
           ! grep -q 'ksu_handle_vfs_read(&file' fs/read_write.c
           grep -q 'extern int ksu_handle_sys_read' fs/read_write.c
           grep -q 'ksu_handle_sys_read(fd, &buf, &count);' fs/read_write.c
+          ! grep -q 'ksu_handle_execveat(&fd' fs/exec.c
+          grep -q 'extern int ksu_handle_execveat_ksud' fs/exec.c
+          grep -q 'ksu_handle_execveat_ksud(&fd' fs/exec.c
           grep -B1 'static ssize_t cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | grep -q '#ifdef CONFIG_CPUSET_ASSIST'
 
       - name: Configure exact donor defconfig
