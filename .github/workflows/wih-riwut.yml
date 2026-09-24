@@ -231,6 +231,8 @@ jobs:
         run: |
           set -o pipefail
           export PATH="$PWD/tc/clang/bin:$PATH"
+          # Suppress dirty-tree '+' suffix while keeping CONFIG_LOCALVERSION=-Wih-Riwut.
+          : > .scmversion
           rm -rf out
           make O=out ARCH=arm64 surya-perf_defconfig
           echo "===== FINAL CONFIG CHECK ====="
@@ -251,6 +253,8 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             2>&1 | tee ../build.log
           test -s out/arch/arm64/boot/Image.gz-dtb
+          test "$(cat out/include/config/kernel.release)" = "4.14.117-Wih-Riwut"
+          echo "Kernel release: $(cat out/include/config/kernel.release)"
           echo "===== BUILD DTBO IMAGE (Waifu original method) ====="
           git clone --depth=1 https://android.googlesource.com/platform/system/libufdt libufdt
           shopt -s nullglob
@@ -277,7 +281,7 @@ jobs:
             echo "KernelSU Next: v1.1.1"
             echo "Hook mode: Manual"
             echo "Source commit: $(git rev-parse HEAD)"
-            echo "Kernel release: $(make -s O=out ARCH=arm64 kernelrelease)"
+            echo "Kernel release: $(cat out/include/config/kernel.release)"
             sha256sum out/arch/arm64/boot/Image.gz-dtb out/arch/arm64/boot/dtbo.img
           } | tee ../artifact/BUILD_INFO.txt
           strings out/arch/arm64/boot/Image.gz-dtb | grep -m1 '4.14.117-Wih-Riwut' || true
