@@ -137,15 +137,16 @@ jobs:
           fn_start=s.find("static int do_execveat_common", decl_start)
           if decl_start < 0 or fn_start < 0:
               raise SystemExit("exec KSU declaration block not found")
-          decl='''#ifdef CONFIG_KSU
-extern bool ksu_execveat_hook __read_mostly;
-extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
-                                    struct user_arg_ptr *argv,
-                                    struct user_arg_ptr *envp, int *flags);
-extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
-                                        void *argv, void *envp, int *flags);
-#endif
-'''
+          decl=(
+              "#ifdef CONFIG_KSU\\n"
+              "extern bool ksu_execveat_hook __read_mostly;\\n"
+              "extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,\\n"
+              "                                    struct user_arg_ptr *argv,\\n"
+              "                                    struct user_arg_ptr *envp, int *flags);\\n"
+              "extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,\\n"
+              "                                        void *argv, void *envp, int *flags);\\n"
+              "#endif\\n"
+          )
           s=s[:decl_start]+decl+s[fn_start:]
 
           # Remove the second, legacy exec hook block inside do_execveat_common.
