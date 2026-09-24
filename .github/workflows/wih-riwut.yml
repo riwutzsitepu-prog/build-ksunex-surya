@@ -234,11 +234,12 @@ jobs:
           # Suppress dirty-tree '+' suffix while keeping CONFIG_LOCALVERSION=-Wih-Riwut.
           : > .scmversion
           rm -rf out
-          make O=out ARCH=arm64 surya-perf_defconfig
+          make O=out ARCH=arm64 LOCALVERSION= surya-perf_defconfig
           echo "===== FINAL CONFIG CHECK ====="
           grep -E '^CONFIG_LOCALVERSION=|^CONFIG_KSU=|^# CONFIG_KSU_KPROBES_HOOK|^CONFIG_KSU_LSM_SECURITY_HOOKS=|^# CONFIG_KPROBES' out/.config
           make -j"$(nproc)" O=out \
             ARCH=arm64 \
+            LOCALVERSION= \
             SUBARCH=arm64 \
             CC=clang \
             AR=llvm-ar \
