@@ -212,6 +212,20 @@ jobs:
           PY
           grep -A2 -F '#define boost_write_wrapper boost_write' kernel/sched/tune.c | grep -F '#define prefer_idle_write_wrapper prefer_idle_write'
 
+          # Run #10: fix legacy HID trace include path for out-of-tree clang build.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/hid/hid-trace.h")
+          s=p.read_text()
+          old="#define TRACE_INCLUDE_PATH ."
+          new="#define TRACE_INCLUDE_PATH ../../drivers/hid"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("hid trace include anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/hid' drivers/hid/hid-trace.h
+
           # Run #10: legacy HID trace header must use a source-relative include path.
           python3 - <<'PY'
           from pathlib import Path
