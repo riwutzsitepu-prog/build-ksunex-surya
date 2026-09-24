@@ -1,0 +1,311 @@
+name: Rethinking 4.14.357 A10 QNATIVE1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rethinking-a10-qnative1.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    env:
+      KERNEL_REPO: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya.git
+      KERNEL_COMMIT: e5a52193a1015217595bee0ac70711077d824069
+      DONOR_REPO: riwutzsitepu-prog/trial-kernel
+      DONOR_REF: aa24e82bacd6ccaf9bca7937a7e2ad99867ab5ad
+      DONOR_B64_SHA256: 6c7b01b3379bb1bf86e0652986ba41dfdbf85e2d959e812e4898f4cff445c9ae
+      DONOR_B64_SIZE: '167296'
+      DONOR_XZ_SHA256: edf5031085d2ba244f92b809cb231f702e2a64db1d4ef88f40fab907bf521200
+      DONOR_XZ_SIZE: '125472'
+      DONOR_DTB_SHA256: 8eb391b228f59ffc98885fcb2101cc2f49965de3e7e4aba5ba864158e43b31e1
+      DONOR_DTB_SIZE: '2092004'
+      OFFICIAL_ZIP_URL: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya/releases/download/202604212227/rethinking-SnowCone-KSU-202604212227.zip
+      OFFICIAL_ZIP_SHA256: 4ab84eb1508f60917249ed5192b06b3238e8a795dd868ffba3943a993f19a55d
+      CLANG_URL: https://github.com/Impqxr/aosp_clang_ci/releases/download/13289611/clang-13289611-linux-x86.tar.xz
+      ZIP_NAME: Rethinking-4.14.357-KSU-Surya-A10-QNATIVE1.zip
+      TAG_NAME: rethinking-a10-qnative1-v1
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
+      - name: Checkout exact QASSA donor DTB data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DONOR_REPO }}
+          ref: ${{ env.DONOR_REF }}
+          path: donor_repo
+
+      - name: Install build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl device-tree-compiler \
+            file flex git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            libelf-dev libssl-dev make python3 python-is-python3 rsync \
+            unzip wget xz-utils zip zstd
+
+      - name: Clone exact Rethinking source
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -q '^VERSION = 4$' Makefile
+          grep -q '^PATCHLEVEL = 14$' Makefile
+          grep -q '^SUBLEVEL = 357$' Makefile
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/source-sha.txt"
+
+      - name: Prepare exact upstream AOSP Clang
+        run: |
+          set -euxo pipefail
+          mkdir -p clang
+          wget -q --show-progress "$CLANG_URL" -O clang.tar.xz
+          tar -xf clang.tar.xz -C clang
+          if compgen -G 'clang/clang-*' > /dev/null; then
+            mv clang/clang-*/* clang/
+          fi
+          test -x clang/bin/clang
+          clang/bin/clang --version | head -n3 | tee compiler.txt
+
+      - name: Configure Android 10 Q native compatibility
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+
+          make O=out ARCH=arm64 surya_defconfig
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-base.config"
+
+          # Preserve Rethinking KSU but switch only Q/early-boot compatibility knobs.
+          scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config --set-str LOCALVERSION "-rethinking-Q10"
+          scripts/config --file out/.config -d LOCALVERSION_AUTO
+          scripts/config --file out/.config -d CAMERA_BOOTCLOCK_TIMESTAMP
+
+          # Surya Android 10 / Q donor platform glue.
+          scripts/config --file out/.config -e ARCH_SM6150
+          scripts/config --file out/.config -e ARCH_SDMMAGPIE
+          scripts/config --file out/.config -e PCI
+          scripts/config --file out/.config -e PCI_MSM
+          scripts/config --file out/.config -e QCOM_WATCHDOG_V2
+          scripts/config --file out/.config -e RT_GROUP_SCHED
+
+          # Legacy Android 10 userdata/filesystem compatibility.
+          scripts/config --file out/.config -e EXT4_ENCRYPTION
+          scripts/config --file out/.config -e EXT4_FS_ENCRYPTION
+          scripts/config --file out/.config -e F2FS_FS_ENCRYPTION
+          scripts/config --file out/.config -e SDCARD_FS
+          scripts/config --file out/.config -e ASHMEM
+          scripts/config --file out/.config -e ION
+          scripts/config --file out/.config -e OVERLAY_FS
+          scripts/config --file out/.config -e DM_CRYPT
+          scripts/config --file out/.config -e DM_DEFAULT_KEY
+
+          make O=out ARCH=arm64 olddefconfig
+
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_LOCALVERSION="-rethinking-Q10"$' out/.config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' out/.config
+          grep -q '^CONFIG_ARCH_SM6150=y$' out/.config
+          grep -q '^CONFIG_ARCH_SDMMAGPIE=y$' out/.config
+          grep -q '^CONFIG_PCI_MSM=y$' out/.config
+          grep -q '^CONFIG_QCOM_WATCHDOG_V2=y$' out/.config
+          grep -q '^CONFIG_RT_GROUP_SCHED=y$' out/.config
+          grep -q '^CONFIG_EXT4_ENCRYPTION=y$' out/.config
+          grep -q '^CONFIG_EXT4_FS_ENCRYPTION=y$' out/.config
+          grep -q '^CONFIG_F2FS_FS_ENCRYPTION=y$' out/.config
+          grep -q '^CONFIG_SDCARD_FS=y$' out/.config
+          grep -q '^CONFIG_ASHMEM=y$' out/.config
+          grep -q '^CONFIG_ION=y$' out/.config
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative1.config"
+
+      - name: Build QNATIVE1 Image.gz
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export USE_CCACHE=1
+          export KBUILD_BUILD_HOST=builder
+          export KBUILD_BUILD_USER=khayloaf
+
+          make -j"$(nproc --all)" O=out ARCH=arm64 \
+            CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LLVM=1 LLVM_IAS=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/Image.gz
+          gzip -t out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10'
+
+      - name: Reconstruct exact QASSA 12-DTB donor tail
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+          B64=donor_exact/qassa-12dtb.tail.xz.b64
+          XZ=donor_exact/qassa-12dtb.tail.xz
+          TAIL=donor_exact/qassa-12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_DTB_SIZE"
+          echo "$DONOR_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' FDT_VALIDATION.txt
+
+      - name: Assemble and validate QASSA Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz donor_exact/qassa-12dtb.tail > Image.gz-dtb
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          data = Path("Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(data) + d.flush()
+          tail = d.unused_data
+          assert len(tail) == int(os.environ["DONOR_DTB_SIZE"]), len(tail)
+          assert hashlib.sha256(tail).hexdigest() == os.environ["DONOR_DTB_SHA256"]
+          Path("Image.raw").write_bytes(raw)
+          Path("verified-dtb-tail.img").write_bytes(tail)
+          PY
+          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb verified-dtb-tail.img | tee compiled-hashes.txt
+
+      - name: Fetch verified official AnyKernel package base
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
+          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
+          unzip -tq official.zip
+
+      - name: Package flashable QNATIVE1
+        run: |
+          set -euxo pipefail
+          rm -rf ak3
+          unzip -q official.zip -d ak3
+
+          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Rethinking 4.14.357 QNATIVE1 KSU | POCO X3 NFC | Android 10
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          block="/dev/block/bootdevice/by-name/boot";
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 QNATIVE1 KSU";
+          ui_print "POCO X3 NFC surya/karna - Android 10 QASSA";
+          ui_print "Q-native source config + exact QASSA 12-DTB";
+          ui_print "DTBO partition untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+          chmod 755 ak3/anykernel.sh
+          chmod 755 ak3/META-INF/com/google/android/update-binary || true
+
+          cat > ak3/RIWUTZ-QNATIVE1-INFO.txt <<EOF
+          Source: $KERNEL_REPO
+          Commit: $KERNEL_COMMIT
+          Kernel base: Linux 4.14.357 Rethinking
+          Root: built-in KSU from source
+          Android target: 10 / QASSA
+          Q compatibility: ARCH_SM6150, PCI_MSM, QCOM_WATCHDOG_V2, RT_GROUP_SCHED,
+                           EXT4/F2FS legacy encryption, Android legacy storage primitives
+          Image format: Image.gz-dtb
+          DTB: exact known-working QASSA 12-FDT donor tail
+          DTB SHA256: $DONOR_DTB_SHA256
+          DTBO: not included / not flashed
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qnative1
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative1.config
+            build.log
+            compiler.txt
+            source-sha.txt
+
+      - name: Publish QNATIVE1 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE1
+          prerelease: true
+          body: |
+            Source-level Android 10/QASSA compatibility build.
+            Exact Rethinking 4.14.357 source commit e5a52193a1015217595bee0ac70711077d824069.
+            Minimal Q-native early-boot config overlay only.
+            Exact known-working QASSA 12-DTB donor tail appended as Image.gz-dtb.
+            DTBO partition untouched.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative1.config
+          fail_on_unmatched_files: true
