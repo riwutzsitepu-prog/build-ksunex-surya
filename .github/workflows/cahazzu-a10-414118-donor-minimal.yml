@@ -139,6 +139,34 @@ jobs:
           PY
           grep -B1 'static ssize_t cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | grep -q '#ifdef CONFIG_CPUSET_ASSIST'
 
+          # Run #2: donor config keeps STUNE_ASSIST disabled; use native writers.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("kernel/sched/tune.c")
+          s=p.read_text()
+          if "#define boost_write_wrapper boost_write" not in s:
+              old="\treturn prefer_idle_write(css, cft, prefer_idle);\n}\n#endif\n"
+              new="\treturn prefer_idle_write(css, cft, prefer_idle);\n}\n#else\n#define boost_write_wrapper boost_write\n#define prefer_idle_write_wrapper prefer_idle_write\n#endif\n"
+              if old not in s:
+                  raise SystemExit("schedtune wrapper anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -A2 -F '#define boost_write_wrapper boost_write' kernel/sched/tune.c | grep -F '#define prefer_idle_write_wrapper prefer_idle_write'
+
+          # Run #2: HID trace header needs a source-relative include path.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/hid/hid-trace.h")
+          s=p.read_text()
+          old="#define TRACE_INCLUDE_PATH ."
+          new="#define TRACE_INCLUDE_PATH ../../drivers/hid"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("HID trace include anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/hid' drivers/hid/hid-trace.h
+
       - name: Configure exact donor hardware config
         working-directory: kernel
         run: |
