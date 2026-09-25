@@ -110,13 +110,571 @@ jobs:
           scripts/config --file out/.config -d BUILD_ARM64_DT_OVERLAY
           scripts/config --file out/.config -e BUILD_ARM64_APPENDED_DTB_IMAGE
           scripts/config --file out/.config -d CAMERA_BOOTCLOCK_TIMESTAMP
+          # Newer 4.14.357 scheduler topology symbols absent from the 4.14.117 donor.
+          # Use the exact values from Rethinking's native surya_defconfig.
+          scripts/config --file out/.config --set-val LITTLE_CPU_MASK 63
+          scripts/config --file out/.config --set-val BIG_CPU_MASK 192
 
           make O=out ARCH=arm64 olddefconfig
 
           grep -q '^CONFIG_KSU=y$' out/.config
           grep -q '^CONFIG_LOCALVERSION="-rethinking-Q10-N4"$' out/.config
           grep -q '^# CONFIG_BUILD_ARM64_DT_OVERLAY is not set$' out/.config
-          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y$' out/.config
+          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y
+          # Critical donor Android 10 platform gates must survive olddefconfig.
+          for k in             CONFIG_SCHED_WALT             CONFIG_RT_GROUP_SCHED             CONFIG_SCHED_CORE_CTL             CONFIG_ARCH_SM6150             CONFIG_ARCH_SDMMAGPIE             CONFIG_PCI_MSM             CONFIG_PINCTRL_SM6150             CONFIG_QCOM_WATCHDOG_V2             CONFIG_MSM_GCC_SM6150             CONFIG_MSM_GPUCC_SM6150             CONFIG_MSM_VIDEOCC_SM6150             CONFIG_MSM_CAMCC_SM6150             CONFIG_MSM_DISPCC_SM6150             CONFIG_QCOM_SM6150_LLCC             CONFIG_QTI_PDC_SM6150             CONFIG_EXT4_ENCRYPTION             CONFIG_F2FS_FS_ENCRYPTION; do
+              grep -q "^$k=y$" out/.config || { echo "MISSING_CRITICAL=$k"; exit 1; }
+          done
+
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative4.config"
+          grep -E '^(CONFIG_SCHED_WALT|CONFIG_RT_GROUP_SCHED|CONFIG_SCHED_CORE_CTL|CONFIG_ARCH_SM6150|CONFIG_ARCH_SDMMAGPIE|CONFIG_PCI_MSM|CONFIG_PINCTRL_SM6150|CONFIG_QCOM_WATCHDOG_V2|CONFIG_MSM_.*SM6150|CONFIG_QCOM_SM6150_LLCC|CONFIG_QTI_PDC_SM6150|CONFIG_EXT4_ENCRYPTION|CONFIG_F2FS_FS_ENCRYPTION)=' out/.config             | tee "$GITHUB_WORKSPACE/qnative4-critical.config"
+
+      - name: Build QNATIVE4 Image.gz
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export KBUILD_BUILD_USER=khayloaf
+          export KBUILD_BUILD_HOST=builder
+
+          make -j"$(nproc --all)" O=out ARCH=arm64             CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-             LLVM=1 LLVM_IAS=1 Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/Image.gz
+          gzip -t out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N4'
+
+      - name: Reconstruct exact donor 12-DTB tail byte-for-byte
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_payload/staging_exact_final
+          mkdir -p exact_dtb
+          B64=exact_dtb/qassa-12dtb.tail.xz.b64
+          XZ=exact_dtb/qassa-12dtb.tail.xz
+          TAIL=exact_dtb/qassa-12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_DTB_SIZE"
+          echo "$DONOR_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_payload/verify_test4_donor.py "$TAIL"             --out-dir exact_dtb/fdts             --report exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' exact_dtb/FDT_VALIDATION.txt
+          cp exact_dtb/FDT_VALIDATION.txt "$GITHUB_WORKSPACE/FDT_VALIDATION.txt"
+
+      - name: Assemble exact-donor QNATIVE4 Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz exact_dtb/qassa-12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          data = Path("Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(data) + d.flush()
+          tail = d.unused_data
+          assert len(tail) == int(os.environ["DONOR_DTB_SIZE"])
+          assert hashlib.sha256(tail).hexdigest() == os.environ["DONOR_DTB_SHA256"]
+          Path("Image.raw").write_bytes(raw)
+          Path("verified-exact-donor-tail.img").write_bytes(tail)
+          PY
+
+          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb verified-exact-donor-tail.img | tee compiled-hashes.txt
+
+      - name: Fetch verified official AnyKernel package base
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
+          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
+          unzip -tq official.zip
+
+      - name: Package flashable QNATIVE4
+        run: |
+          set -euxo pipefail
+          rm -rf ak3
+          unzip -q official.zip -d ak3
+
+          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+          cp qnative4-critical.config ak3/QNATIVE4-CRITICAL-CONFIG.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Rethinking 4.14.357 QNATIVE4 KSU | Surya A10 | DONORCONFIG
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          block="/dev/block/bootdevice/by-name/boot";
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 QNATIVE4 KSU";
+          ui_print "Android 10 donor Surya-stock defconfig";
+          ui_print "Exact original QASSA 12-DTB bytes";
+          ui_print "DTBO untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+
+          chmod 755 ak3/anykernel.sh
+          chmod 755 ak3/META-INF/com/google/android/update-binary || true
+
+          cat > ak3/RIWUTZ-QNATIVE4-INFO.txt <<EOF
+          Kernel source: $KERNEL_REPO
+          Kernel commit: $KERNEL_COMMIT
+          Android target: 10 / QASSA
+          Kernel config base: exact donor Surya-stock_defconfig blob $DONOR_DEFCONFIG_BLOB
+          Defconfig source: $DONOR_KERNEL_COMMIT
+          DTB tail: exact original known-booting QASSA 12-DTB bytes
+          DTB SHA256: $DONOR_DTB_SHA256
+          DTBO partition: untouched
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qnative4-donorconfig-exactdtb
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative4.config
+            qnative4-critical.config
+            donor-defconfig.sha256
+            compiler.txt
+            source-sha.txt
+            build.log
+
+      - name: Publish QNATIVE4 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE4 DONORCONFIG
+          prerelease: true
+          body: |
+            QNATIVE4 after QNATIVE2/QNATIVE3 returned directly to fastboot.
+            Returns to the exact original QASSA 12-DTB binary tail that is known to pass bootloader selection.
+            The kernel itself is rebuilt from Rethinking 4.14.357 using the donor Android 10 Surya-stock defconfig as the configuration base.
+            DTBO remains untouched.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative4.config
+            qnative4-critical.config
+            donor-defconfig.sha256
+          fail_on_unmatched_files: true
+ out/.config
+          grep -q '^CONFIG_LITTLE_CPU_MASK=63
+          # Critical donor Android 10 platform gates must survive olddefconfig.
+          for k in             CONFIG_SCHED_WALT             CONFIG_RT_GROUP_SCHED             CONFIG_SCHED_CORE_CTL             CONFIG_ARCH_SM6150             CONFIG_ARCH_SDMMAGPIE             CONFIG_PCI_MSM             CONFIG_PINCTRL_SM6150             CONFIG_QCOM_WATCHDOG_V2             CONFIG_MSM_GCC_SM6150             CONFIG_MSM_GPUCC_SM6150             CONFIG_MSM_VIDEOCC_SM6150             CONFIG_MSM_CAMCC_SM6150             CONFIG_MSM_DISPCC_SM6150             CONFIG_QCOM_SM6150_LLCC             CONFIG_QTI_PDC_SM6150             CONFIG_EXT4_ENCRYPTION             CONFIG_F2FS_FS_ENCRYPTION; do
+              grep -q "^$k=y$" out/.config || { echo "MISSING_CRITICAL=$k"; exit 1; }
+          done
+
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative4.config"
+          grep -E '^(CONFIG_SCHED_WALT|CONFIG_RT_GROUP_SCHED|CONFIG_SCHED_CORE_CTL|CONFIG_ARCH_SM6150|CONFIG_ARCH_SDMMAGPIE|CONFIG_PCI_MSM|CONFIG_PINCTRL_SM6150|CONFIG_QCOM_WATCHDOG_V2|CONFIG_MSM_.*SM6150|CONFIG_QCOM_SM6150_LLCC|CONFIG_QTI_PDC_SM6150|CONFIG_EXT4_ENCRYPTION|CONFIG_F2FS_FS_ENCRYPTION)=' out/.config             | tee "$GITHUB_WORKSPACE/qnative4-critical.config"
+
+      - name: Build QNATIVE4 Image.gz
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export KBUILD_BUILD_USER=khayloaf
+          export KBUILD_BUILD_HOST=builder
+
+          make -j"$(nproc --all)" O=out ARCH=arm64             CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-             LLVM=1 LLVM_IAS=1 Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/Image.gz
+          gzip -t out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N4'
+
+      - name: Reconstruct exact donor 12-DTB tail byte-for-byte
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_payload/staging_exact_final
+          mkdir -p exact_dtb
+          B64=exact_dtb/qassa-12dtb.tail.xz.b64
+          XZ=exact_dtb/qassa-12dtb.tail.xz
+          TAIL=exact_dtb/qassa-12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_DTB_SIZE"
+          echo "$DONOR_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_payload/verify_test4_donor.py "$TAIL"             --out-dir exact_dtb/fdts             --report exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' exact_dtb/FDT_VALIDATION.txt
+          cp exact_dtb/FDT_VALIDATION.txt "$GITHUB_WORKSPACE/FDT_VALIDATION.txt"
+
+      - name: Assemble exact-donor QNATIVE4 Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz exact_dtb/qassa-12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          data = Path("Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(data) + d.flush()
+          tail = d.unused_data
+          assert len(tail) == int(os.environ["DONOR_DTB_SIZE"])
+          assert hashlib.sha256(tail).hexdigest() == os.environ["DONOR_DTB_SHA256"]
+          Path("Image.raw").write_bytes(raw)
+          Path("verified-exact-donor-tail.img").write_bytes(tail)
+          PY
+
+          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb verified-exact-donor-tail.img | tee compiled-hashes.txt
+
+      - name: Fetch verified official AnyKernel package base
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
+          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
+          unzip -tq official.zip
+
+      - name: Package flashable QNATIVE4
+        run: |
+          set -euxo pipefail
+          rm -rf ak3
+          unzip -q official.zip -d ak3
+
+          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+          cp qnative4-critical.config ak3/QNATIVE4-CRITICAL-CONFIG.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Rethinking 4.14.357 QNATIVE4 KSU | Surya A10 | DONORCONFIG
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          block="/dev/block/bootdevice/by-name/boot";
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 QNATIVE4 KSU";
+          ui_print "Android 10 donor Surya-stock defconfig";
+          ui_print "Exact original QASSA 12-DTB bytes";
+          ui_print "DTBO untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+
+          chmod 755 ak3/anykernel.sh
+          chmod 755 ak3/META-INF/com/google/android/update-binary || true
+
+          cat > ak3/RIWUTZ-QNATIVE4-INFO.txt <<EOF
+          Kernel source: $KERNEL_REPO
+          Kernel commit: $KERNEL_COMMIT
+          Android target: 10 / QASSA
+          Kernel config base: exact donor Surya-stock_defconfig blob $DONOR_DEFCONFIG_BLOB
+          Defconfig source: $DONOR_KERNEL_COMMIT
+          DTB tail: exact original known-booting QASSA 12-DTB bytes
+          DTB SHA256: $DONOR_DTB_SHA256
+          DTBO partition: untouched
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qnative4-donorconfig-exactdtb
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative4.config
+            qnative4-critical.config
+            donor-defconfig.sha256
+            compiler.txt
+            source-sha.txt
+            build.log
+
+      - name: Publish QNATIVE4 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE4 DONORCONFIG
+          prerelease: true
+          body: |
+            QNATIVE4 after QNATIVE2/QNATIVE3 returned directly to fastboot.
+            Returns to the exact original QASSA 12-DTB binary tail that is known to pass bootloader selection.
+            The kernel itself is rebuilt from Rethinking 4.14.357 using the donor Android 10 Surya-stock defconfig as the configuration base.
+            DTBO remains untouched.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative4.config
+            qnative4-critical.config
+            donor-defconfig.sha256
+          fail_on_unmatched_files: true
+ out/.config
+          grep -q '^CONFIG_BIG_CPU_MASK=192
+          # Critical donor Android 10 platform gates must survive olddefconfig.
+          for k in             CONFIG_SCHED_WALT             CONFIG_RT_GROUP_SCHED             CONFIG_SCHED_CORE_CTL             CONFIG_ARCH_SM6150             CONFIG_ARCH_SDMMAGPIE             CONFIG_PCI_MSM             CONFIG_PINCTRL_SM6150             CONFIG_QCOM_WATCHDOG_V2             CONFIG_MSM_GCC_SM6150             CONFIG_MSM_GPUCC_SM6150             CONFIG_MSM_VIDEOCC_SM6150             CONFIG_MSM_CAMCC_SM6150             CONFIG_MSM_DISPCC_SM6150             CONFIG_QCOM_SM6150_LLCC             CONFIG_QTI_PDC_SM6150             CONFIG_EXT4_ENCRYPTION             CONFIG_F2FS_FS_ENCRYPTION; do
+              grep -q "^$k=y$" out/.config || { echo "MISSING_CRITICAL=$k"; exit 1; }
+          done
+
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative4.config"
+          grep -E '^(CONFIG_SCHED_WALT|CONFIG_RT_GROUP_SCHED|CONFIG_SCHED_CORE_CTL|CONFIG_ARCH_SM6150|CONFIG_ARCH_SDMMAGPIE|CONFIG_PCI_MSM|CONFIG_PINCTRL_SM6150|CONFIG_QCOM_WATCHDOG_V2|CONFIG_MSM_.*SM6150|CONFIG_QCOM_SM6150_LLCC|CONFIG_QTI_PDC_SM6150|CONFIG_EXT4_ENCRYPTION|CONFIG_F2FS_FS_ENCRYPTION)=' out/.config             | tee "$GITHUB_WORKSPACE/qnative4-critical.config"
+
+      - name: Build QNATIVE4 Image.gz
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export KBUILD_BUILD_USER=khayloaf
+          export KBUILD_BUILD_HOST=builder
+
+          make -j"$(nproc --all)" O=out ARCH=arm64             CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-             LLVM=1 LLVM_IAS=1 Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/Image.gz
+          gzip -t out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N4'
+
+      - name: Reconstruct exact donor 12-DTB tail byte-for-byte
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_payload/staging_exact_final
+          mkdir -p exact_dtb
+          B64=exact_dtb/qassa-12dtb.tail.xz.b64
+          XZ=exact_dtb/qassa-12dtb.tail.xz
+          TAIL=exact_dtb/qassa-12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_DTB_SIZE"
+          echo "$DONOR_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_payload/verify_test4_donor.py "$TAIL"             --out-dir exact_dtb/fdts             --report exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' exact_dtb/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' exact_dtb/FDT_VALIDATION.txt
+          cp exact_dtb/FDT_VALIDATION.txt "$GITHUB_WORKSPACE/FDT_VALIDATION.txt"
+
+      - name: Assemble exact-donor QNATIVE4 Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz exact_dtb/qassa-12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          data = Path("Image.gz-dtb").read_bytes()
+          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+          raw = d.decompress(data) + d.flush()
+          tail = d.unused_data
+          assert len(tail) == int(os.environ["DONOR_DTB_SIZE"])
+          assert hashlib.sha256(tail).hexdigest() == os.environ["DONOR_DTB_SHA256"]
+          Path("Image.raw").write_bytes(raw)
+          Path("verified-exact-donor-tail.img").write_bytes(tail)
+          PY
+
+          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb verified-exact-donor-tail.img | tee compiled-hashes.txt
+
+      - name: Fetch verified official AnyKernel package base
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
+          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
+          unzip -tq official.zip
+
+      - name: Package flashable QNATIVE4
+        run: |
+          set -euxo pipefail
+          rm -rf ak3
+          unzip -q official.zip -d ak3
+
+          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+          cp qnative4-critical.config ak3/QNATIVE4-CRITICAL-CONFIG.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Rethinking 4.14.357 QNATIVE4 KSU | Surya A10 | DONORCONFIG
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          block="/dev/block/bootdevice/by-name/boot";
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 QNATIVE4 KSU";
+          ui_print "Android 10 donor Surya-stock defconfig";
+          ui_print "Exact original QASSA 12-DTB bytes";
+          ui_print "DTBO untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+
+          chmod 755 ak3/anykernel.sh
+          chmod 755 ak3/META-INF/com/google/android/update-binary || true
+
+          cat > ak3/RIWUTZ-QNATIVE4-INFO.txt <<EOF
+          Kernel source: $KERNEL_REPO
+          Kernel commit: $KERNEL_COMMIT
+          Android target: 10 / QASSA
+          Kernel config base: exact donor Surya-stock_defconfig blob $DONOR_DEFCONFIG_BLOB
+          Defconfig source: $DONOR_KERNEL_COMMIT
+          DTB tail: exact original known-booting QASSA 12-DTB bytes
+          DTB SHA256: $DONOR_DTB_SHA256
+          DTBO partition: untouched
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qnative4-donorconfig-exactdtb
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative4.config
+            qnative4-critical.config
+            donor-defconfig.sha256
+            compiler.txt
+            source-sha.txt
+            build.log
+
+      - name: Publish QNATIVE4 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE4 DONORCONFIG
+          prerelease: true
+          body: |
+            QNATIVE4 after QNATIVE2/QNATIVE3 returned directly to fastboot.
+            Returns to the exact original QASSA 12-DTB binary tail that is known to pass bootloader selection.
+            The kernel itself is rebuilt from Rethinking 4.14.357 using the donor Android 10 Surya-stock defconfig as the configuration base.
+            DTBO remains untouched.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            rethinking-qnative4.config
+            qnative4-critical.config
+            donor-defconfig.sha256
+          fail_on_unmatched_files: true
+ out/.config
 
           # Critical donor Android 10 platform gates must survive olddefconfig.
           for k in             CONFIG_SCHED_WALT             CONFIG_RT_GROUP_SCHED             CONFIG_SCHED_CORE_CTL             CONFIG_ARCH_SM6150             CONFIG_ARCH_SDMMAGPIE             CONFIG_PCI_MSM             CONFIG_PINCTRL_SM6150             CONFIG_QCOM_WATCHDOG_V2             CONFIG_MSM_GCC_SM6150             CONFIG_MSM_GPUCC_SM6150             CONFIG_MSM_VIDEOCC_SM6150             CONFIG_MSM_CAMCC_SM6150             CONFIG_MSM_DISPCC_SM6150             CONFIG_QCOM_SM6150_LLCC             CONFIG_QTI_PDC_SM6150             CONFIG_EXT4_ENCRYPTION             CONFIG_F2FS_FS_ENCRYPTION; do
