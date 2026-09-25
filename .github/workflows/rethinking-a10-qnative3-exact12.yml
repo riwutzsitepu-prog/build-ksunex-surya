@@ -1,0 +1,327 @@
+name: Rethinking 4.14.357 A10 QNATIVE3 EXACT12
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rethinking-a10-qnative3-exact12.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    env:
+      KERNEL_REPO: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya.git
+      KERNEL_COMMIT: e5a52193a1015217595bee0ac70711077d824069
+      DONOR_REPO: stormbreaker-project/kernel_xiaomi_surya
+      DONOR_COMMIT: b2268fb331c144580e5be88d8d5d6f91ac8182b3
+      CLANG_URL: https://github.com/Impqxr/aosp_clang_ci/releases/download/13289611/clang-13289611-linux-x86.tar.xz
+      OFFICIAL_ZIP_URL: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya/releases/download/202604212227/rethinking-SnowCone-KSU-202604212227.zip
+      OFFICIAL_ZIP_SHA256: 4ab84eb1508f60917249ed5192b06b3238e8a795dd868ffba3943a993f19a55d
+      ZIP_NAME: Rethinking-4.14.357-KSU-Surya-A10-QNATIVE3-EXACT12.zip
+      TAG_NAME: rethinking-a10-qnative3-exact12-v1
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
+      - name: Checkout donor-era QASSA DTS
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DONOR_REPO }}
+          ref: ${{ env.DONOR_COMMIT }}
+          path: donor_source
+          fetch-depth: 1
+          sparse-checkout: |
+            arch/arm64/boot/dts/qcom
+          sparse-checkout-cone-mode: false
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison build-essential ca-certificates cpio curl device-tree-compiler file flex git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev make python3 python-is-python3 rsync unzip wget xz-utils zip zstd
+
+      - name: Clone exact Rethinking source
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -q '^VERSION = 4$' Makefile
+          grep -q '^PATCHLEVEL = 14$' Makefile
+          grep -q '^SUBLEVEL = 357$' Makefile
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/source-sha.txt"
+
+      - name: Import only donor SDMMAGPIE DTS family
+        run: |
+          set -euxo pipefail
+          SRC="$GITHUB_WORKSPACE/donor_source/arch/arm64/boot/dts/qcom"
+          DST="$GITHUB_WORKSPACE/kernel/arch/arm64/boot/dts/qcom"
+          find "$SRC" -maxdepth 1 -type f -name 'sdmmagpie*' -printf '%f\n' | sort | tee donor-sdmmagpie-filelist.txt
+          test "$(wc -l < donor-sdmmagpie-filelist.txt)" -ge 40
+          while IFS= read -r f; do cp -f "$SRC/$f" "$DST/$f"; done < donor-sdmmagpie-filelist.txt
+          for f in sdmmagpie.dts sdmmagpie.dtsi sdmmagpie-idp.dtsi sdmmagpie-pinctrl.dtsi sdmmagpie-regulator.dtsi; do
+            cmp -s "$SRC/$f" "$DST/$f"
+          done
+          sha256sum "$DST/sdmmagpie.dts" "$DST/sdmmagpie.dtsi" "$DST/sdmmagpie-idp.dtsi" "$DST/sdmmagpie-pinctrl.dtsi" "$DST/sdmmagpie-regulator.dtsi" | tee donor-dts-critical-sha256.txt
+
+      - name: Prepare AOSP Clang 21
+        run: |
+          set -euxo pipefail
+          mkdir -p clang
+          wget -q --show-progress "$CLANG_URL" -O clang.tar.xz
+          tar -xf clang.tar.xz -C clang
+          if compgen -G 'clang/clang-*' > /dev/null; then mv clang/clang-*/* clang/; fi
+          test -x clang/bin/clang
+          clang/bin/clang --version | head -n3 | tee compiler.txt
+
+      - name: Configure QNATIVE3 Android 10
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          make O=out ARCH=arm64 surya_defconfig
+
+          scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config --set-str LOCALVERSION "-rethinking-Q10-N3"
+          scripts/config --file out/.config -d LOCALVERSION_AUTO
+          scripts/config --file out/.config -d CAMERA_BOOTCLOCK_TIMESTAMP
+          scripts/config --file out/.config -e ARCH_SM6150
+          scripts/config --file out/.config -e ARCH_SDMMAGPIE
+          scripts/config --file out/.config -e PCI
+          scripts/config --file out/.config -e PCI_MSM
+          scripts/config --file out/.config -e QCOM_WATCHDOG_V2
+          scripts/config --file out/.config -e RT_GROUP_SCHED
+          scripts/config --file out/.config -e EXT4_ENCRYPTION
+          scripts/config --file out/.config -e F2FS_FS_ENCRYPTION
+          scripts/config --file out/.config -e SDCARD_FS
+          scripts/config --file out/.config -e ASHMEM
+          scripts/config --file out/.config -e ION
+          scripts/config --file out/.config -e OVERLAY_FS
+          scripts/config --file out/.config -e DM_CRYPT
+          scripts/config --file out/.config -e DM_DEFAULT_KEY
+          scripts/config --file out/.config -e BUILD_ARM64_APPENDED_DTB_IMAGE
+          scripts/config --file out/.config -d BUILD_ARM64_DT_OVERLAY
+          make O=out ARCH=arm64 olddefconfig
+
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_LOCALVERSION="-rethinking-Q10-N3"$' out/.config
+          grep -q '^CONFIG_ARCH_SM6150=y$' out/.config
+          grep -q '^CONFIG_ARCH_SDMMAGPIE=y$' out/.config
+          grep -q '^CONFIG_PCI_MSM=y$' out/.config
+          grep -q '^# CONFIG_BUILD_ARM64_DT_OVERLAY is not set$' out/.config
+          cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative3.config"
+
+      - name: Build kernel Image.gz
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          export KBUILD_BUILD_HOST=builder
+          export KBUILD_BUILD_USER=khayloaf
+          ARGS="O=out ARCH=arm64 CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1"
+          make -j"$(nproc --all)" $ARGS Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build-kernel.log"
+          test -s out/arch/arm64/boot/Image
+          test -s out/arch/arm64/boot/Image.gz
+          gzip -t out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
+          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N3'
+
+      - name: Build exact 12 donor-named DTBs
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          ARGS="O=out ARCH=arm64 CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1"
+          DTBS="qcom/msm8992-bullhead-rev-101.dtb qcom/sa6155p.dtb qcom/sdmmagpie.dtb qcom/apq8096-db820c.dtb qcom/apq8016-sbc.dtb qcom/msm8996-mtp.dtb qcom/msm8916-mtp.dtb qcom/msm8994-angler-rev-101.dtb qcom/sa6155.dtb qcom/sm6150.dtb qcom/ipq8074-hk01.dtb qcom/sm6150p.dtb"
+          : > "$GITHUB_WORKSPACE/build-dtb.log"
+          for d in $DTBS; do
+            make -j"$(nproc --all)" $ARGS "$d" 2>&1 | tee -a "$GITHUB_WORKSPACE/build-dtb.log"
+          done
+
+      - name: Assemble exact-order 12-DTB tail
+        run: |
+          set -euxo pipefail
+          D=kernel/out/arch/arm64/boot/dts/qcom
+          mkdir -p fresh12
+          names=(
+            msm8992-bullhead-rev-101.dtb
+            sa6155p.dtb
+            sdmmagpie.dtb
+            apq8096-db820c.dtb
+            apq8016-sbc.dtb
+            msm8996-mtp.dtb
+            msm8916-mtp.dtb
+            msm8994-angler-rev-101.dtb
+            sa6155.dtb
+            sm6150.dtb
+            ipq8074-hk01.dtb
+            sm6150p.dtb
+          )
+          : > fresh12/tail.bin
+          : > fresh12/manifest.txt
+          for i in "${!names[@]}"; do
+            n="${names[$i]}"
+            test -s "$D/$n"
+            test "$(xxd -p -l 4 "$D/$n")" = "d00dfeed"
+            cp "$D/$n" "fresh12/$(printf '%02d' "$i")-$n"
+            cat "$D/$n" >> fresh12/tail.bin
+            printf '%02d %s size=%s sha256=%s\n' "$i" "$n" "$(stat -c %s "$D/$n")" "$(sha256sum "$D/$n" | awk '{print $1}')" | tee -a fresh12/manifest.txt
+          done
+          test "$(find fresh12 -maxdepth 1 -name '*.dtb' | wc -l)" = "12"
+          sha256sum fresh12/tail.bin | tee fresh12/tail.sha256
+
+      - name: Report exact 12 DTB identities
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import pathlib, subprocess, re, json
+          rows=[]
+          for p in sorted(pathlib.Path('fresh12').glob('*.dtb')):
+              dts=subprocess.check_output(['dtc','-I','dtb','-O','dts',str(p)],stderr=subprocess.DEVNULL,text=True)
+              def prop(name):
+                  m=re.search(r'\n\s*'+re.escape(name)+r'\s*=\s*([^;]+);',dts)
+                  return m.group(1).strip() if m else ''
+              rows.append({'file':p.name,'model':prop('model'),'compatible':prop('compatible'),'msm-id':prop('qcom,msm-id'),'board-id':prop('qcom,board-id')})
+          pathlib.Path('fresh12/identities.json').write_text(json.dumps(rows,indent=2))
+          with open('fresh12/identities.txt','w') as f:
+              for r in rows:
+                  f.write(f"{r['file']}\n model={r['model']}\n compatible={r['compatible']}\n msm-id={r['msm-id']}\n board-id={r['board-id']}\n")
+          PY
+          cat fresh12/identities.txt
+
+      - name: Assemble and validate QNATIVE3 Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cat Image.gz fresh12/tail.bin > Image.gz-dtb
+          python3 - <<'PY'
+          import pathlib,zlib,struct
+          data=pathlib.Path('Image.gz-dtb').read_bytes()
+          expected=pathlib.Path('fresh12/tail.bin').read_bytes()
+          d=zlib.decompressobj(16+zlib.MAX_WBITS)
+          raw=d.decompress(data)+d.flush()
+          assert d.unused_data==expected
+          pos=0; count=0
+          while pos < len(expected):
+              assert expected[pos:pos+4]==b'\xd0\x0d\xfe\xed'
+              total=struct.unpack('>I',expected[pos+4:pos+8])[0]
+              assert total>40 and pos+total<=len(expected)
+              pos += total; count += 1
+          assert pos==len(expected) and count==12
+          pathlib.Path('Image.raw').write_bytes(raw)
+          PY
+          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
+          sha256sum Image.gz Image.gz-dtb fresh12/tail.bin | tee compiled-hashes.txt
+
+      - name: Fetch verified official AnyKernel base
+        run: |
+          set -euxo pipefail
+          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
+          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
+          unzip -tq official.zip
+
+      - name: Package flashable QNATIVE3
+        run: |
+          set -euxo pipefail
+          rm -rf ak3
+          unzip -q official.zip -d ak3
+          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp fresh12/manifest.txt ak3/DTB-MANIFEST.txt
+          cp fresh12/identities.txt ak3/DTB-IDENTITIES.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          # AnyKernel3 Ramdisk Mod Script
+          properties() { '
+          kernel.string=Rethinking 4.14.357 QNATIVE3 KSU | Surya A10 | EXACT12
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          block="/dev/block/bootdevice/by-name/boot";
+          is_slot_device=0;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          ui_print "Rethinking 4.14.357 QNATIVE3 KSU";
+          ui_print "Android 10 QASSA";
+          ui_print "Fresh-compiled exact-order 12 DTBs";
+          ui_print "Donor SDMMAGPIE DTS family";
+          ui_print "DTBO untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+
+          chmod 755 ak3/anykernel.sh
+          chmod 755 ak3/META-INF/com/google/android/update-binary || true
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
+          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rethinking-a10-qnative3-exact12
+          path: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            assembled-kernel-version.txt
+            compiled-hashes.txt
+            fresh12/manifest.txt
+            fresh12/identities.txt
+            fresh12/identities.json
+            fresh12/tail.sha256
+            rethinking-qnative3.config
+            build-kernel.log
+            build-dtb.log
+            compiler.txt
+            source-sha.txt
+
+      - name: Publish QNATIVE3 release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE3 EXACT12
+          prerelease: true
+          body: |
+            QNATIVE3 after QNATIVE2 returned directly to fastboot.
+            Uses Rethinking 4.14.357 kernel plus donor-era QASSA SDMMAGPIE DTS family.
+            Rebuilds the exact 12 DTB names in the exact donor order, then appends those fresh DTBs to Image.gz.
+            No legacy binary DTB tail is reused. DTBO partition untouched.
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256
+            kernel-version.txt
+            compiled-hashes.txt
+            fresh12/manifest.txt
+            fresh12/identities.txt
+            fresh12/tail.sha256
+            rethinking-qnative3.config
+          fail_on_unmatched_files: true
