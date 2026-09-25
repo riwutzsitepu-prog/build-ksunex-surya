@@ -1,0 +1,533 @@
+name: CahAzzu A10 4.14.118 Control NoKSU
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cahazzu-a10-414118-control-noksu.yml"
+      - "scripts/cahazzu_manual_hooks.py"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      KERNEL_REPO: https://github.com/syahiddrakness/Kernel_Xiaomi_Surya-A10.git
+      KERNEL_COMMIT: 579000d6085df70d300330d485e74e86308c7706
+      DEFCONFIG_BLOB: 1aab348ac65154d4ae1b17c09bfa639b1e3fc13e
+      KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next.git
+      KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
+      KSU_TAG: v1.1.1
+      TC_REPO: https://github.com/kdrag0n/proton-clang.git
+      TC_COMMIT: 08a35cd973e866932ca1b7f3e573293e0829c129
+      EXPECTED_LLVM_COMMIT: 9829f5e6b1bca9b61efc629770d28bb9014dec45
+      DONOR_REPO: riwutzsitepu-prog/trial-kernel
+      DONOR_REF: aa24e82bacd6ccaf9bca7937a7e2ad99867ab5ad
+      EXPECTED_DTB_SHA256: 8eb391b228f59ffc98885fcb2101cc2f49965de3e7e4aba5ba864158e43b31e1
+      DONOR_B64_SHA256: 6c7b01b3379bb1bf86e0652986ba41dfdbf85e2d959e812e4898f4cff445c9ae
+      DONOR_B64_SIZE: '167296'
+      DONOR_XZ_SHA256: edf5031085d2ba244f92b809cb231f702e2a64db1d4ef88f40fab907bf521200
+      DONOR_XZ_SIZE: '125472'
+      DONOR_TAIL_SIZE: '2092004'
+
+    steps:
+      - name: Checkout build files
+        uses: actions/checkout@v4
+
+      - name: Checkout exact donor DTB payload
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.DONOR_REPO }}
+          ref: ${{ env.DONOR_REF }}
+          path: donor_repo
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl device-tree-compiler file flex git \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev \
+            make python3 python-is-python3 rsync unzip xz-utils zip zstd
+
+      - name: Fetch direct donor-line Linux 4.14.118
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -Fx 'VERSION = 4' Makefile
+          grep -Fx 'PATCHLEVEL = 14' Makefile
+          grep -Fx 'SUBLEVEL = 118' Makefile
+          test -f arch/arm64/configs/Surya-stock_defconfig
+          test "$(git hash-object arch/arm64/configs/Surya-stock_defconfig)" = "$DEFCONFIG_BLOB"
+
+      - name: Fetch exact donor Proton Clang
+        run: |
+          set -euxo pipefail
+          git init proton-clang
+          cd proton-clang
+          git remote add origin "$TC_REPO"
+          git fetch --depth=1 origin "$TC_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$TC_COMMIT"
+          ./bin/clang --version | tee "$GITHUB_WORKSPACE/compiler.txt"
+          grep -q "$EXPECTED_LLVM_COMMIT" "$GITHUB_WORKSPACE/compiler.txt"
+
+      - name: Fix donor-line cpuset assist compile guard
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("kernel/cgroup/cpuset.c")
+          s=p.read_text()
+          start=s.find("static ssize_t cpuset_write_resmask_assist")
+          end=s.find("static ssize_t cpuset_write_resmask_wrapper", start)
+          if start < 0 or end < 0:
+              raise SystemExit("cpuset assist helper boundaries not found")
+          prefix=s[max(0,start-80):start]
+          if "#ifdef CONFIG_CPUSET_ASSIST" not in prefix:
+              block=s[start:end]
+              s=s[:start]+"#ifdef CONFIG_CPUSET_ASSIST\n"+block+"#endif\n\n"+s[end:]
+              p.write_text(s)
+          PY
+          grep -B1 'static ssize_t cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | grep -q '#ifdef CONFIG_CPUSET_ASSIST'
+
+          # Run #2: donor config keeps STUNE_ASSIST disabled; use native writers.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("kernel/sched/tune.c")
+          s=p.read_text()
+          if "#define boost_write_wrapper boost_write" not in s:
+              old="\treturn prefer_idle_write(css, cft, prefer_idle);\n}\n#endif\n"
+              new="\treturn prefer_idle_write(css, cft, prefer_idle);\n}\n#else\n#define boost_write_wrapper boost_write\n#define prefer_idle_write_wrapper prefer_idle_write\n#endif\n"
+              if old not in s:
+                  raise SystemExit("schedtune wrapper anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -A2 -F '#define boost_write_wrapper boost_write' kernel/sched/tune.c | grep -F '#define prefer_idle_write_wrapper prefer_idle_write'
+
+          # Run #2: HID trace header needs a source-relative include path.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/hid/hid-trace.h")
+          s=p.read_text()
+          old="#define TRACE_INCLUDE_PATH ."
+          new="#define TRACE_INCLUDE_PATH ../../drivers/hid"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("HID trace include anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/hid' drivers/hid/hid-trace.h
+
+          # Run #3: Qualcomm camera trace include path.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("drivers/media/platform/msm/camera/cam_utils/cam_trace.h")
+          s=p.read_text()
+          old="#define TRACE_INCLUDE_PATH ."
+          new="#define TRACE_INCLUDE_PATH ../../drivers/media/platform/msm/camera/cam_utils"
+          if new not in s:
+              if old not in s:
+                  raise SystemExit("camera trace include anchor not found")
+              p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/media/platform/msm/camera/cam_utils' drivers/media/platform/msm/camera/cam_utils/cam_trace.h
+
+          # Run #4: Qualcomm IPA trace headers need source-relative include paths.
+          python3 - <<'PY'
+          from pathlib import Path
+          patches = {
+              "drivers/platform/msm/ipa/ipa_v3/ipa_trace.h":
+                  "../../drivers/platform/msm/ipa/ipa_v3",
+              "drivers/platform/msm/ipa/ipa_clients/rndis_ipa_trace.h":
+                  "../../drivers/platform/msm/ipa/ipa_clients",
+          }
+          for name, path in patches.items():
+              p=Path(name)
+              s=p.read_text()
+              old="#define TRACE_INCLUDE_PATH ."
+              new=f"#define TRACE_INCLUDE_PATH {path}"
+              if new not in s:
+                  if old not in s:
+                      raise SystemExit(f"IPA trace anchor not found: {name}")
+                  p.write_text(s.replace(old,new,1))
+          PY
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_v3' drivers/platform/msm/ipa/ipa_v3/ipa_trace.h
+          grep -Fn '#define TRACE_INCLUDE_PATH ../../drivers/platform/msm/ipa/ipa_clients' drivers/platform/msm/ipa/ipa_clients/rndis_ipa_trace.h
+
+      - name: Configure exact donor hardware config
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          cp arch/arm64/configs/Surya-stock_defconfig .config
+          test "$(git hash-object .config)" = "$DEFCONFIG_BLOB"
+
+          sed -i 's/^CONFIG_LITTLE_CPU_MASK=$/CONFIG_LITTLE_CPU_MASK=63/' .config
+          sed -i 's/^CONFIG_BIG_CPU_MASK=$/CONFIG_BIG_CPU_MASK=192/' .config
+          scripts/config --file .config --set-val LITTLE_CPU_MASK 63
+          scripts/config --file .config --set-val BIG_CPU_MASK 192
+
+          scripts/config --file .config -d KSU
+          scripts/config --file .config --set-str LOCALVERSION "-CahAzzu"
+          scripts/config --file .config -d LOCALVERSION_AUTO
+
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export LOCALVERSION=""
+          make ARCH=arm64 olddefconfig
+
+          grep -Fx 'CONFIG_LITTLE_CPU_MASK=63' .config
+          grep -Fx 'CONFIG_BIG_CPU_MASK=192' .config
+          grep -Fx '# CONFIG_KPROBES is not set' .config
+          if grep -q '^CONFIG_KSU=y          grep -Fx 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI=y' .config
+          grep -Fx 'CONFIG_AW8624_HAPTIC=y' .config
+          grep -Fx 'CONFIG_DRV2624_HAPTIC=y' .config
+          grep -Fx 'CONFIG_OVERLAY_FS=y' .config
+          grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' .config
+          grep -Fx '# CONFIG_LOCALVERSION_AUTO is not set' .config
+          cp .config "$GITHUB_WORKSPACE/CahAzzu.config"
+
+      - name: Build pure CahAzzu 4.14.118 Image.gz
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=CahAzzu
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export LOCALVERSION=""
+
+          make -j"$(nproc)" ARCH=arm64 \
+            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LOCALVERSION= \
+            Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s arch/arm64/boot/Image.gz
+          gzip -t arch/arm64/boot/Image.gz
+
+      - name: Reconstruct exact boot-proven QASSA 12-DTB
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+          B64=donor_exact/qassa_donor_12dtb.tail.xz.b64
+          XZ=donor_exact/qassa_donor_12dtb.tail.xz
+          TAIL=donor_exact/qassa_donor_12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_TAIL_SIZE"
+          echo "$EXPECTED_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' donor_exact/FDT_VALIDATION.txt
+
+      - name: Assemble and validate CahAzzu 4.14.118
+        run: |
+          set -euxo pipefail
+          cp kernel/arch/arm64/boot/Image.gz Image.gz
+          cat Image.gz donor_exact/qassa_donor_12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          blob=Path("Image.gz-dtb").read_bytes()
+          d=zlib.decompressobj(16+zlib.MAX_WBITS)
+          raw=d.decompress(blob)+d.flush()
+          tail=d.unused_data
+          Path("CahAzzu-Image").write_bytes(raw)
+          Path("CahAzzu-dtb-tail.img").write_bytes(tail)
+          if len(tail) != int(os.environ["DONOR_TAIL_SIZE"]):
+              raise SystemExit("DTB tail size mismatch")
+          if hashlib.sha256(tail).hexdigest() != os.environ["EXPECTED_DTB_SHA256"]:
+              raise SystemExit("DTB tail hash mismatch")
+          PY
+
+          strings CahAzzu-Image | grep -m1 '^Linux version ' | tee kernel-version.txt
+          strings CahAzzu-Image | grep -q '4.14.118-CahAzzu'
+          ! strings CahAzzu-Image | grep -q '4.14.118-CahAzzu+'
+          ! strings CahAzzu-Image | grep -q '/data/adb/ksud'
+          echo "KernelSU: disabled (control build)" | tee ksu-kernel-version.txt
+
+          cp donor_exact/FDT_VALIDATION.txt FDT_VALIDATION.txt
+          sha256sum Image.gz Image.gz-dtb CahAzzu-dtb-tail.img | tee compiled-hashes.txt
+
+      - name: Package CahAzzu
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          git -C ak3 checkout --detach e4b1bb25ca2aabcfd57f694a5998d87130701b71
+          rm -rf ak3/.git ak3/.github
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+          cp ksu-kernel-version.txt ak3/ksu-kernel-version.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          ### AnyKernel3
+          properties() { '
+          kernel.string=CahAzzu
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+
+          ui_print "CahAzzu";
+          ui_print "Linux 4.14.118";
+          ui_print "KernelSU disabled - control build";
+          ui_print "Exact QASSA 12-DTB donor tail";
+          ui_print "DTBO untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+          sed -i 's/^[[:space:]]\{10\}//' ak3/anykernel.sh
+          chmod 755 ak3/anykernel.sh
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/CahAzzu.zip" . -x '*.git*' 'README.md' '*placeholder' >/dev/null)
+          unzip -tq CahAzzu.zip
+          unzip -l CahAzzu.zip | grep -F 'Image.gz-dtb'
+          unzip -l CahAzzu.zip | grep -F 'FDT_VALIDATION.txt'
+          ! unzip -l CahAzzu.zip | grep -q 'dtbo.img'
+          sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
+
+      - name: Upload final CahAzzu
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-4.14.118-Control-NoKSU
+          path: |
+            CahAzzu.zip
+            CahAzzu.zip.sha256
+            kernel-version.txt
+            ksu-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            CahAzzu.config
+          if-no-files-found: error
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-4.14.118-Control-NoKSU-failure
+          path: |
+            build.log
+            compiler.txt
+            CahAzzu.config
+          if-no-files-found: ignore
+ .config; then exit 1; fi
+          grep -Fx 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI=y' .config
+          grep -Fx 'CONFIG_AW8624_HAPTIC=y' .config
+          grep -Fx 'CONFIG_DRV2624_HAPTIC=y' .config
+          grep -Fx 'CONFIG_OVERLAY_FS=y' .config
+          grep -Fx 'CONFIG_LOCALVERSION="-CahAzzu"' .config
+          grep -Fx '# CONFIG_LOCALVERSION_AUTO is not set' .config
+          cp .config "$GITHUB_WORKSPACE/CahAzzu.config"
+
+      - name: Build pure CahAzzu 4.14.118 Image.gz
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=CahAzzu
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export LOCALVERSION=""
+
+          make -j"$(nproc)" ARCH=arm64 \
+            CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            LOCALVERSION= \
+            Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s arch/arm64/boot/Image.gz
+          gzip -t arch/arm64/boot/Image.gz
+
+      - name: Reconstruct exact boot-proven QASSA 12-DTB
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+          B64=donor_exact/qassa_donor_12dtb.tail.xz.b64
+          XZ=donor_exact/qassa_donor_12dtb.tail.xz
+          TAIL=donor_exact/qassa_donor_12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_TAIL_SIZE"
+          echo "$EXPECTED_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' donor_exact/FDT_VALIDATION.txt
+
+      - name: Assemble and validate CahAzzu 4.14.118
+        run: |
+          set -euxo pipefail
+          cp kernel/arch/arm64/boot/Image.gz Image.gz
+          cat Image.gz donor_exact/qassa_donor_12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          blob=Path("Image.gz-dtb").read_bytes()
+          d=zlib.decompressobj(16+zlib.MAX_WBITS)
+          raw=d.decompress(blob)+d.flush()
+          tail=d.unused_data
+          Path("CahAzzu-Image").write_bytes(raw)
+          Path("CahAzzu-dtb-tail.img").write_bytes(tail)
+          if len(tail) != int(os.environ["DONOR_TAIL_SIZE"]):
+              raise SystemExit("DTB tail size mismatch")
+          if hashlib.sha256(tail).hexdigest() != os.environ["EXPECTED_DTB_SHA256"]:
+              raise SystemExit("DTB tail hash mismatch")
+          PY
+
+          strings CahAzzu-Image | grep -m1 '^Linux version ' | tee kernel-version.txt
+          strings CahAzzu-Image | grep -q '4.14.118-CahAzzu'
+          ! strings CahAzzu-Image | grep -q '4.14.118-CahAzzu+'
+          strings CahAzzu-Image | grep -q '/data/adb/ksud'
+
+          KSU_KERNEL_VERSION="$(grep -oE 'KernelSU-Next version: [0-9]+' build.log | tail -n1 | awk '{print $3}')"
+          test -n "$KSU_KERNEL_VERSION"
+          test "$KSU_KERNEL_VERSION" -ge 12797
+          echo "KernelSU Next kernel-side version: $KSU_KERNEL_VERSION" | tee ksu-kernel-version.txt
+
+          cp donor_exact/FDT_VALIDATION.txt FDT_VALIDATION.txt
+          sha256sum Image.gz Image.gz-dtb CahAzzu-dtb-tail.img | tee compiled-hashes.txt
+
+      - name: Package CahAzzu
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/osm0sis/AnyKernel3.git ak3
+          git -C ak3 checkout --detach e4b1bb25ca2aabcfd57f694a5998d87130701b71
+          rm -rf ak3/.git ak3/.github
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb ak3/dtb.img ak3/dtbo.img
+          cp Image.gz-dtb ak3/Image.gz-dtb
+          cp FDT_VALIDATION.txt ak3/FDT_VALIDATION.txt
+          cp kernel-version.txt ak3/kernel-version.txt
+          cp ksu-kernel-version.txt ak3/ksu-kernel-version.txt
+
+          cat > ak3/anykernel.sh <<'AK3'
+          ### AnyKernel3
+          properties() { '
+          kernel.string=CahAzzu
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=0
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10
+          '; }
+
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          . tools/ak3-core.sh;
+
+          ui_print "CahAzzu";
+          ui_print "Linux 4.14.118";
+          ui_print "KernelSU Next v1.1.1";
+          ui_print "Exact QASSA 12-DTB donor tail";
+          ui_print "DTBO untouched";
+
+          dump_boot;
+          write_boot;
+          AK3
+          sed -i 's/^[[:space:]]\{10\}//' ak3/anykernel.sh
+          chmod 755 ak3/anykernel.sh
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/CahAzzu.zip" . -x '*.git*' 'README.md' '*placeholder' >/dev/null)
+          unzip -tq CahAzzu.zip
+          unzip -l CahAzzu.zip | grep -F 'Image.gz-dtb'
+          unzip -l CahAzzu.zip | grep -F 'FDT_VALIDATION.txt'
+          ! unzip -l CahAzzu.zip | grep -q 'dtbo.img'
+          sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
+
+      - name: Upload final CahAzzu
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-4.14.118
+          path: |
+            CahAzzu.zip
+            CahAzzu.zip.sha256
+            kernel-version.txt
+            ksu-kernel-version.txt
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+            CahAzzu.config
+          if-no-files-found: error
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-4.14.118-failure
+          path: |
+            build.log
+            compiler.txt
+            CahAzzu.config
+          if-no-files-found: ignore
