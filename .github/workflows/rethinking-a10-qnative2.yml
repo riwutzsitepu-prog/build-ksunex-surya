@@ -36,6 +36,10 @@ jobs:
           repository: ${{ env.Q_DTS_REPO }}
           ref: ${{ env.Q_DTS_REF }}
           path: q_source
+          fetch-depth: 1
+          sparse-checkout: |
+            arch/arm64/boot/dts/qcom
+          sparse-checkout-cone-mode: false
 
       - name: Install build dependencies
         run: |
