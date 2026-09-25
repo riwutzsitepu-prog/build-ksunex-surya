@@ -303,6 +303,13 @@ jobs:
           scripts/config --file .config --set-val LITTLE_CPU_MASK 63
           scripts/config --file .config --set-val BIG_CPU_MASK 192
 
+          # Keep only the exact manual-only KSU Next v1.1.1 path.
+          scripts/config --file .config -e KSU
+          scripts/config --file .config -d KSU_KPROBES_HOOK
+          scripts/config --file .config -d KSU_DEBUG
+          scripts/config --file .config -d KSU_LSM_SECURITY_HOOKS
+          scripts/config --file .config -d KSU_SUSFS
+
           scripts/config --file .config --set-str LOCALVERSION "-CahAzzu"
           scripts/config --file .config -d LOCALVERSION_AUTO
 
@@ -316,6 +323,10 @@ jobs:
           grep -Fx 'CONFIG_LITTLE_CPU_MASK=63' .config
           grep -Fx 'CONFIG_BIG_CPU_MASK=192' .config
           grep -Fx '# CONFIG_KPROBES is not set' .config
+          grep -Fx 'CONFIG_KSU=y' .config
+          grep -Fx '# CONFIG_KSU_KPROBES_HOOK is not set' .config
+          grep -Fx '# CONFIG_KSU_LSM_SECURITY_HOOKS is not set' .config
+          grep -Fx '# CONFIG_KSU_SUSFS is not set' .config
           grep -Fx 'CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y' .config
           grep -Fx 'CONFIG_IMG_GZ_DTB=y' .config
           grep -Fx 'CONFIG_TOUCHSCREEN_NT36xxx_HOSTDL_SPI=y' .config
