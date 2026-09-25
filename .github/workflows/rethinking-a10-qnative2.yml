@@ -14,7 +14,6 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 120
-
     env:
       KERNEL_REPO: https://github.com/Cilok-LAB/android_kernel_xiaomi_surya.git
       KERNEL_COMMIT: e5a52193a1015217595bee0ac70711077d824069
@@ -45,7 +44,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             bc bison build-essential ca-certificates cpio curl device-tree-compiler             file flex git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi             libelf-dev libssl-dev make python3 python-is-python3 rsync             unzip wget xz-utils zip zstd
+          sudo apt-get install -y --no-install-recommends bc bison build-essential ca-certificates cpio curl device-tree-compiler file flex git gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev make python3 python-is-python3 rsync unzip wget xz-utils zip zstd
 
       - name: Clone exact Rethinking source
         run: |
@@ -56,48 +55,29 @@ jobs:
           git fetch --depth=1 origin "$KERNEL_COMMIT"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
-          grep -q '^VERSION = 4$' Makefile
-          grep -q '^PATCHLEVEL = 14$' Makefile
           grep -q '^SUBLEVEL = 357$' Makefile
           git rev-parse HEAD | tee "$GITHUB_WORKSPACE/source-sha.txt"
 
-      - name: Import Android 10 SDMMAGPIE device tree family
+      - name: Import Android 10 SDMMAGPIE DTS family
         run: |
           set -euxo pipefail
           SRC="$GITHUB_WORKSPACE/q_source/arch/arm64/boot/dts/qcom"
           DST="$GITHUB_WORKSPACE/kernel/arch/arm64/boot/dts/qcom"
-
-          test -f "$SRC/sdmmagpie-idp.dts"
-          test -f "$SRC/sdmmagpie.dtsi"
-          test -f "$SRC/sdmmagpie-idp.dtsi"
-          test -f "$SRC/sdmmagpie-pinctrl.dtsi"
-          test -f "$SRC/sdmmagpie-regulator.dtsi"
-
           find "$SRC" -maxdepth 1 -type f -name 'sdmmagpie*' -printf '%f\n' | sort | tee q-dts-filelist.txt
           test "$(wc -l < q-dts-filelist.txt)" -ge 40
+          while IFS= read -r f; do cp -f "$SRC/$f" "$DST/$f"; done < q-dts-filelist.txt
+          for f in sdmmagpie-idp.dts sdmmagpie.dtsi sdmmagpie-idp.dtsi sdmmagpie-pinctrl.dtsi sdmmagpie-regulator.dtsi; do
+            cmp -s "$SRC/$f" "$DST/$f"
+          done
+          sha256sum "$DST/sdmmagpie-idp.dts" "$DST/sdmmagpie.dtsi" "$DST/sdmmagpie-idp.dtsi" "$DST/sdmmagpie-pinctrl.dtsi" "$DST/sdmmagpie-regulator.dtsi" | tee q-dts-critical-sha256.txt
 
-          while IFS= read -r f; do
-            cp -f "$SRC/$f" "$DST/$f"
-          done < q-dts-filelist.txt
-
-          sha256sum             "$DST/sdmmagpie-idp.dts"             "$DST/sdmmagpie.dtsi"             "$DST/sdmmagpie-idp.dtsi"             "$DST/sdmmagpie-pinctrl.dtsi"             "$DST/sdmmagpie-regulator.dtsi" | tee q-dts-critical-sha256.txt
-
-          # Confirm exact Q branch content now exists in Rethinking tree.
-          cmp -s "$SRC/sdmmagpie-idp.dts" "$DST/sdmmagpie-idp.dts"
-          cmp -s "$SRC/sdmmagpie.dtsi" "$DST/sdmmagpie.dtsi"
-          cmp -s "$SRC/sdmmagpie-idp.dtsi" "$DST/sdmmagpie-idp.dtsi"
-          cmp -s "$SRC/sdmmagpie-pinctrl.dtsi" "$DST/sdmmagpie-pinctrl.dtsi"
-          cmp -s "$SRC/sdmmagpie-regulator.dtsi" "$DST/sdmmagpie-regulator.dtsi"
-
-      - name: Prepare exact upstream AOSP Clang
+      - name: Prepare AOSP Clang 21
         run: |
           set -euxo pipefail
           mkdir -p clang
           wget -q --show-progress "$CLANG_URL" -O clang.tar.xz
           tar -xf clang.tar.xz -C clang
-          if compgen -G 'clang/clang-*' > /dev/null; then
-            mv clang/clang-*/* clang/
-          fi
+          if compgen -G 'clang/clang-*' > /dev/null; then mv clang/clang-*/* clang/; fi
           test -x clang/bin/clang
           clang/bin/clang --version | head -n3 | tee compiler.txt
 
@@ -106,21 +86,18 @@ jobs:
           set -euxo pipefail
           cd kernel
           export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
-
           make O=out ARCH=arm64 surya_defconfig
 
           scripts/config --file out/.config -e KSU
           scripts/config --file out/.config --set-str LOCALVERSION "-rethinking-Q10-N2"
           scripts/config --file out/.config -d LOCALVERSION_AUTO
           scripts/config --file out/.config -d CAMERA_BOOTCLOCK_TIMESTAMP
-
           scripts/config --file out/.config -e ARCH_SM6150
           scripts/config --file out/.config -e ARCH_SDMMAGPIE
           scripts/config --file out/.config -e PCI
           scripts/config --file out/.config -e PCI_MSM
           scripts/config --file out/.config -e QCOM_WATCHDOG_V2
           scripts/config --file out/.config -e RT_GROUP_SCHED
-
           scripts/config --file out/.config -e EXT4_ENCRYPTION
           scripts/config --file out/.config -e F2FS_FS_ENCRYPTION
           scripts/config --file out/.config -e SDCARD_FS
@@ -129,8 +106,6 @@ jobs:
           scripts/config --file out/.config -e OVERLAY_FS
           scripts/config --file out/.config -e DM_CRYPT
           scripts/config --file out/.config -e DM_DEFAULT_KEY
-
-          # Match the Q-surya DTB strategy.
           scripts/config --file out/.config -e BUILD_ARM64_APPENDED_DTB_IMAGE
           scripts/config --file out/.config -d BUILD_ARM64_DT_OVERLAY
 
@@ -145,356 +120,11 @@ jobs:
           grep -q '^CONFIG_RT_GROUP_SCHED=y$' out/.config
           grep -q '^CONFIG_EXT4_ENCRYPTION=y$' out/.config
           grep -q '^CONFIG_F2FS_FS_ENCRYPTION=y$' out/.config
-          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y "$GITHUB_WORKSPACE/rethinking-qnative2.config"
-
-      - name: Build QNATIVE2 kernel and DTBs
-        run: |
-          set -o pipefail
-          cd kernel
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
-          export USE_CCACHE=1
-          export KBUILD_BUILD_HOST=builder
-          export KBUILD_BUILD_USER=khayloaf
-
-          make -j"$(nproc --all)" O=out ARCH=arm64             CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-             LLVM=1 LLVM_IAS=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-
-          test -s out/arch/arm64/boot/Image
-          test -s out/arch/arm64/boot/Image.gz
-          test -s out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb
-
-          gzip -t out/arch/arm64/boot/Image.gz
-          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
-          cp out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb "$GITHUB_WORKSPACE/sdmmagpie-idp.dtb"
-
-          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
-          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N2'
-
-      - name: Validate native Q SDMMAGPIE IDP DTB
-        run: |
-          set -euxo pipefail
-          test "$(xxd -p -l 4 sdmmagpie-idp.dtb)" = "d00dfeed"
-          dtc -I dtb -O dts -o sdmmagpie-idp.decoded.dts sdmmagpie-idp.dtb 2>dtc-warnings.log || true
-
-          grep -q 'model = "Qualcomm Technologies, Inc. SDMMAGPIE PM6150 IDP"' sdmmagpie-idp.decoded.dts
-          grep -q 'qcom,sdmmagpie-idp' sdmmagpie-idp.decoded.dts
-          grep -q 'qcom,msm-id' sdmmagpie-idp.decoded.dts
-          grep -q 'qcom,board-id' sdmmagpie-idp.decoded.dts
-
-          stat -c '%s' sdmmagpie-idp.dtb | tee native-dtb-size.txt
-          sha256sum sdmmagpie-idp.dtb | tee native-dtb-sha256.txt
-
-      - name: Assemble single native-Q DTB image
-        run: |
-          set -euxo pipefail
-          cat Image.gz sdmmagpie-idp.dtb > Image.gz-dtb
-
-          python3 - <<'PY'
-          import hashlib, zlib
-          from pathlib import Path
-          data = Path("Image.gz-dtb").read_bytes()
-          dtb = Path("sdmmagpie-idp.dtb").read_bytes()
-          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-          raw = d.decompress(data) + d.flush()
-          tail = d.unused_data
-          assert tail == dtb
-          assert tail[:4] == bytes.fromhex("d00dfeed")
-          Path("Image.raw").write_bytes(raw)
-          Path("verified-native-q-dtb.img").write_bytes(tail)
-          PY
-
-          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
-          sha256sum Image.gz Image.gz-dtb verified-native-q-dtb.img | tee compiled-hashes.txt
-
-      - name: Fetch verified official AnyKernel package base
-        run: |
-          set -euxo pipefail
-          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
-          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
-          unzip -tq official.zip
-
-      - name: Package flashable QNATIVE2
-        run: |
-          set -euxo pipefail
-          rm -rf ak3
-          unzip -q official.zip -d ak3
-
-          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
-          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
-          cp Image.gz-dtb ak3/Image.gz-dtb
-          cp native-dtb-sha256.txt ak3/native-dtb-sha256.txt
-          cp kernel-version.txt ak3/kernel-version.txt
-
-          cat > ak3/anykernel.sh <<'AK3'
-          # AnyKernel3 Ramdisk Mod Script
-          properties() { '
-          kernel.string=Rethinking 4.14.357 QNATIVE2 KSU | POCO X3 NFC | Android 10
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=surya
-          device.name2=karna
-          supported.versions=10
-          '; }
-
-          block="/dev/block/bootdevice/by-name/boot";
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
-          . tools/ak3-core.sh;
-
-          ui_print "Rethinking 4.14.357 QNATIVE2 KSU";
-          ui_print "Android 10 Q-surya native SDMMAGPIE DTS";
-          ui_print "Single sdmmagpie-idp.dtb appended";
-          ui_print "No legacy 12-DTB tail; DTBO untouched";
-
-          dump_boot;
-          write_boot;
-          AK3
-
-          chmod 755 ak3/anykernel.sh
-          chmod 755 ak3/META-INF/com/google/android/update-binary || true
-
-          cat > ak3/RIWUTZ-QNATIVE2-INFO.txt <<EOF
-          Kernel source: $KERNEL_REPO
-          Kernel commit: $KERNEL_COMMIT
-          Kernel: Linux 4.14.357 Rethinking
-          Android target: 10 / QASSA
-          DTS source: F1xy-kernels/SURYA_kernel branch Q-surya
-          DTS family: all sdmmagpie* files imported before build
-          Final DTB: sdmmagpie-idp.dtb compiled by Rethinking 4.14.357 tree
-          Image format: Image.gz-dtb with one native-Q DTB
-          DTBO partition: untouched
-          EOF
-
-          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
-          unzip -tq "$ZIP_NAME"
-          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
-          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
-          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
-          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
-          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rethinking-a10-qnative2-singledtb
-          path: |
-            ${{ env.ZIP_NAME }}
-            ${{ env.ZIP_NAME }}.sha256
-            kernel-version.txt
-            assembled-kernel-version.txt
-            compiled-hashes.txt
-            native-dtb-sha256.txt
-            native-dtb-size.txt
-            q-dts-filelist.txt
-            q-dts-critical-sha256.txt
-            rethinking-qnative2.config
-            build.log
-            compiler.txt
-            source-sha.txt
-
-      - name: Publish QNATIVE2 release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE2 SINGLEDTB
-          prerelease: true
-          body: |
-            Source-level Android 10/QASSA build.
-            Rethinking 4.14.357 kernel source with the Android 10 Q-surya sdmmagpie DTS family imported before compile.
-            Final Image.gz-dtb contains only the newly compiled sdmmagpie-idp.dtb.
-            The previous legacy 12-DTB binary tail is not used.
-            DTBO partition remains untouched.
-          files: |
-            ${{ env.ZIP_NAME }}
-            ${{ env.ZIP_NAME }}.sha256
-            kernel-version.txt
-            compiled-hashes.txt
-            native-dtb-sha256.txt
-            q-dts-critical-sha256.txt
-            rethinking-qnative2.config
-          fail_on_unmatched_files: true
- out/.config
-          grep -q '^# CONFIG_BUILD_ARM64_DT_OVERLAY is not set "$GITHUB_WORKSPACE/rethinking-qnative2.config"
-
-      - name: Build QNATIVE2 kernel and DTBs
-        run: |
-          set -o pipefail
-          cd kernel
-          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
-          export USE_CCACHE=1
-          export KBUILD_BUILD_HOST=builder
-          export KBUILD_BUILD_USER=khayloaf
-
-          make -j"$(nproc --all)" O=out ARCH=arm64             CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-             LLVM=1 LLVM_IAS=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-
-          test -s out/arch/arm64/boot/Image
-          test -s out/arch/arm64/boot/Image.gz
-          test -s out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb
-
-          gzip -t out/arch/arm64/boot/Image.gz
-          cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
-          cp out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb "$GITHUB_WORKSPACE/sdmmagpie-idp.dtb"
-
-          strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
-          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N2'
-
-      - name: Validate native Q SDMMAGPIE IDP DTB
-        run: |
-          set -euxo pipefail
-          test "$(xxd -p -l 4 sdmmagpie-idp.dtb)" = "d00dfeed"
-          dtc -I dtb -O dts -o sdmmagpie-idp.decoded.dts sdmmagpie-idp.dtb 2>dtc-warnings.log || true
-
-          grep -q 'model = "Qualcomm Technologies, Inc. SDMMAGPIE PM6150 IDP"' sdmmagpie-idp.decoded.dts
-          grep -q 'qcom,sdmmagpie-idp' sdmmagpie-idp.decoded.dts
-          grep -q 'qcom,msm-id' sdmmagpie-idp.decoded.dts
-          grep -q 'qcom,board-id' sdmmagpie-idp.decoded.dts
-
-          stat -c '%s' sdmmagpie-idp.dtb | tee native-dtb-size.txt
-          sha256sum sdmmagpie-idp.dtb | tee native-dtb-sha256.txt
-
-      - name: Assemble single native-Q DTB image
-        run: |
-          set -euxo pipefail
-          cat Image.gz sdmmagpie-idp.dtb > Image.gz-dtb
-
-          python3 - <<'PY'
-          import hashlib, zlib
-          from pathlib import Path
-          data = Path("Image.gz-dtb").read_bytes()
-          dtb = Path("sdmmagpie-idp.dtb").read_bytes()
-          d = zlib.decompressobj(16 + zlib.MAX_WBITS)
-          raw = d.decompress(data) + d.flush()
-          tail = d.unused_data
-          assert tail == dtb
-          assert tail[:4] == bytes.fromhex("d00dfeed")
-          Path("Image.raw").write_bytes(raw)
-          Path("verified-native-q-dtb.img").write_bytes(tail)
-          PY
-
-          strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
-          sha256sum Image.gz Image.gz-dtb verified-native-q-dtb.img | tee compiled-hashes.txt
-
-      - name: Fetch verified official AnyKernel package base
-        run: |
-          set -euxo pipefail
-          wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
-          echo "$OFFICIAL_ZIP_SHA256  official.zip" | sha256sum -c -
-          unzip -tq official.zip
-
-      - name: Package flashable QNATIVE2
-        run: |
-          set -euxo pipefail
-          rm -rf ak3
-          unzip -q official.zip -d ak3
-
-          rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
-          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
-          cp Image.gz-dtb ak3/Image.gz-dtb
-          cp native-dtb-sha256.txt ak3/native-dtb-sha256.txt
-          cp kernel-version.txt ak3/kernel-version.txt
-
-          cat > ak3/anykernel.sh <<'AK3'
-          # AnyKernel3 Ramdisk Mod Script
-          properties() { '
-          kernel.string=Rethinking 4.14.357 QNATIVE2 KSU | POCO X3 NFC | Android 10
-          do.devicecheck=1
-          do.modules=0
-          do.systemless=1
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=surya
-          device.name2=karna
-          supported.versions=10
-          '; }
-
-          block="/dev/block/bootdevice/by-name/boot";
-          is_slot_device=0;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
-          . tools/ak3-core.sh;
-
-          ui_print "Rethinking 4.14.357 QNATIVE2 KSU";
-          ui_print "Android 10 Q-surya native SDMMAGPIE DTS";
-          ui_print "Single sdmmagpie-idp.dtb appended";
-          ui_print "No legacy 12-DTB tail; DTBO untouched";
-
-          dump_boot;
-          write_boot;
-          AK3
-
-          chmod 755 ak3/anykernel.sh
-          chmod 755 ak3/META-INF/com/google/android/update-binary || true
-
-          cat > ak3/RIWUTZ-QNATIVE2-INFO.txt <<EOF
-          Kernel source: $KERNEL_REPO
-          Kernel commit: $KERNEL_COMMIT
-          Kernel: Linux 4.14.357 Rethinking
-          Android target: 10 / QASSA
-          DTS source: F1xy-kernels/SURYA_kernel branch Q-surya
-          DTS family: all sdmmagpie* files imported before build
-          Final DTB: sdmmagpie-idp.dtb compiled by Rethinking 4.14.357 tree
-          Image format: Image.gz-dtb with one native-Q DTB
-          DTBO partition: untouched
-          EOF
-
-          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
-          unzip -tq "$ZIP_NAME"
-          unzip -l "$ZIP_NAME" | grep -q 'META-INF/com/google/android/update-binary'
-          unzip -l "$ZIP_NAME" | grep -q 'Image.gz-dtb'
-          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtbo\.img$'
-          ! unzip -l "$ZIP_NAME" | grep -E '(^|/)dtb\.img$'
-          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rethinking-a10-qnative2-singledtb
-          path: |
-            ${{ env.ZIP_NAME }}
-            ${{ env.ZIP_NAME }}.sha256
-            kernel-version.txt
-            assembled-kernel-version.txt
-            compiled-hashes.txt
-            native-dtb-sha256.txt
-            native-dtb-size.txt
-            q-dts-filelist.txt
-            q-dts-critical-sha256.txt
-            rethinking-qnative2.config
-            build.log
-            compiler.txt
-            source-sha.txt
-
-      - name: Publish QNATIVE2 release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE2 SINGLEDTB
-          prerelease: true
-          body: |
-            Source-level Android 10/QASSA build.
-            Rethinking 4.14.357 kernel source with the Android 10 Q-surya sdmmagpie DTS family imported before compile.
-            Final Image.gz-dtb contains only the newly compiled sdmmagpie-idp.dtb.
-            The previous legacy 12-DTB binary tail is not used.
-            DTBO partition remains untouched.
-          files: |
-            ${{ env.ZIP_NAME }}
-            ${{ env.ZIP_NAME }}.sha256
-            kernel-version.txt
-            compiled-hashes.txt
-            native-dtb-sha256.txt
-            q-dts-critical-sha256.txt
-            rethinking-qnative2.config
-          fail_on_unmatched_files: true
- out/.config
-
+          grep -q '^CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y$' out/.config
+          grep -q '^# CONFIG_BUILD_ARM64_DT_OVERLAY is not set$' out/.config
           cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative2.config"
 
-      - name: Build QNATIVE2 kernel and DTBs
+      - name: Build QNATIVE2 kernel and base DTBs
         run: |
           set -o pipefail
           cd kernel
@@ -502,17 +132,13 @@ jobs:
           export USE_CCACHE=1
           export KBUILD_BUILD_HOST=builder
           export KBUILD_BUILD_USER=khayloaf
-
-          make -j"$(nproc --all)" O=out ARCH=arm64             CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm             OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip             CROSS_COMPILE=aarch64-linux-gnu-             CROSS_COMPILE_COMPAT=arm-linux-gnueabi-             LLVM=1 LLVM_IAS=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
-
+          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           test -s out/arch/arm64/boot/Image
           test -s out/arch/arm64/boot/Image.gz
           test -s out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb
-
           gzip -t out/arch/arm64/boot/Image.gz
           cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
           cp out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb "$GITHUB_WORKSPACE/sdmmagpie-idp.dtb"
-
           strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
           strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N2'
 
@@ -520,39 +146,33 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(xxd -p -l 4 sdmmagpie-idp.dtb)" = "d00dfeed"
-          dtc -I dtb -O dts -o sdmmagpie-idp.decoded.dts sdmmagpie-idp.dtb 2>dtc-warnings.log || true
-
-          grep -q 'model = "Qualcomm Technologies, Inc. SDMMAGPIE PM6150 IDP"' sdmmagpie-idp.decoded.dts
+          dtc -I dtb -O dts -o sdmmagpie-idp.decoded.dts sdmmagpie-idp.dtb 2>dtc-warnings.log
+          grep -q 'SDMMAGPIE PM6150 IDP' sdmmagpie-idp.decoded.dts
           grep -q 'qcom,sdmmagpie-idp' sdmmagpie-idp.decoded.dts
           grep -q 'qcom,msm-id' sdmmagpie-idp.decoded.dts
           grep -q 'qcom,board-id' sdmmagpie-idp.decoded.dts
-
           stat -c '%s' sdmmagpie-idp.dtb | tee native-dtb-size.txt
           sha256sum sdmmagpie-idp.dtb | tee native-dtb-sha256.txt
 
-      - name: Assemble single native-Q DTB image
+      - name: Assemble single native Q DTB image
         run: |
           set -euxo pipefail
           cat Image.gz sdmmagpie-idp.dtb > Image.gz-dtb
-
           python3 - <<'PY'
-          import hashlib, zlib
+          import zlib
           from pathlib import Path
           data = Path("Image.gz-dtb").read_bytes()
           dtb = Path("sdmmagpie-idp.dtb").read_bytes()
           d = zlib.decompressobj(16 + zlib.MAX_WBITS)
           raw = d.decompress(data) + d.flush()
-          tail = d.unused_data
-          assert tail == dtb
-          assert tail[:4] == bytes.fromhex("d00dfeed")
+          assert d.unused_data == dtb
+          assert dtb[:4] == bytes.fromhex("d00dfeed")
           Path("Image.raw").write_bytes(raw)
-          Path("verified-native-q-dtb.img").write_bytes(tail)
           PY
-
           strings Image.raw | grep -m1 '^Linux version ' | tee assembled-kernel-version.txt
-          sha256sum Image.gz Image.gz-dtb verified-native-q-dtb.img | tee compiled-hashes.txt
+          sha256sum Image.gz Image.gz-dtb sdmmagpie-idp.dtb | tee compiled-hashes.txt
 
-      - name: Fetch verified official AnyKernel package base
+      - name: Fetch verified official AnyKernel base
         run: |
           set -euxo pipefail
           wget -q --show-progress "$OFFICIAL_ZIP_URL" -O official.zip
@@ -564,7 +184,6 @@ jobs:
           set -euxo pipefail
           rm -rf ak3
           unzip -q official.zip -d ak3
-
           rm -f ak3/kernels/Image ak3/kernels/Image.gz ak3/kernels/dtb.img ak3/kernels/dtbo.img
           rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb.img ak3/dtbo.img
           cp Image.gz-dtb ak3/Image.gz-dtb
@@ -593,26 +212,24 @@ jobs:
           . tools/ak3-core.sh;
 
           ui_print "Rethinking 4.14.357 QNATIVE2 KSU";
-          ui_print "Android 10 Q-surya native SDMMAGPIE DTS";
-          ui_print "Single sdmmagpie-idp.dtb appended";
-          ui_print "No legacy 12-DTB tail; DTBO untouched";
+          ui_print "Android 10 Q-surya native SDMMAGPIE";
+          ui_print "Single sdmmagpie-idp.dtb";
+          ui_print "DTBO untouched";
 
           dump_boot;
           write_boot;
           AK3
-
           chmod 755 ak3/anykernel.sh
           chmod 755 ak3/META-INF/com/google/android/update-binary || true
 
           cat > ak3/RIWUTZ-QNATIVE2-INFO.txt <<EOF
           Kernel source: $KERNEL_REPO
           Kernel commit: $KERNEL_COMMIT
-          Kernel: Linux 4.14.357 Rethinking
+          Kernel: Linux 4.14.357 Rethinking QNATIVE2
           Android target: 10 / QASSA
-          DTS source: F1xy-kernels/SURYA_kernel branch Q-surya
-          DTS family: all sdmmagpie* files imported before build
-          Final DTB: sdmmagpie-idp.dtb compiled by Rethinking 4.14.357 tree
-          Image format: Image.gz-dtb with one native-Q DTB
+          DTS source: $Q_DTS_REPO branch $Q_DTS_REF
+          Final DTB: sdmmagpie-idp.dtb compiled inside Rethinking 4.14.357
+          Legacy 12-DTB tail: not used
           DTBO partition: untouched
           EOF
 
@@ -650,11 +267,10 @@ jobs:
           name: Rethinking 4.14.357 KSU Surya Android 10 QNATIVE2 SINGLEDTB
           prerelease: true
           body: |
-            Source-level Android 10/QASSA build.
-            Rethinking 4.14.357 kernel source with the Android 10 Q-surya sdmmagpie DTS family imported before compile.
-            Final Image.gz-dtb contains only the newly compiled sdmmagpie-idp.dtb.
-            The previous legacy 12-DTB binary tail is not used.
-            DTBO partition remains untouched.
+            Android 10 QASSA source-level test.
+            Uses the Android 10 Q-surya SDMMAGPIE DTS family compiled inside Rethinking 4.14.357.
+            Final kernel image contains one sdmmagpie-idp.dtb.
+            DT overlay is disabled and the DTBO partition is untouched.
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
