@@ -1,0 +1,166 @@
+name: CahAzzu A10 4.14.150 QASSA12DTB Repack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cahazzu-a10-414150-qassa12dtb-repack.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repack:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      BASE_RUN_ID: '36077809596'
+      EXPECTED_DTB_SHA256: 8eb391b228f59ffc98885fcb2101cc2f49965de3e7e4aba5ba864158e43b31e1
+      DONOR_B64_SHA256: 6c7b01b3379bb1bf86e0652986ba41dfdbf85e2d959e812e4898f4cff445c9ae
+      DONOR_B64_SIZE: '167296'
+      DONOR_XZ_SHA256: edf5031085d2ba244f92b809cb231f702e2a64db1d4ef88f40fab907bf521200
+      DONOR_XZ_SIZE: '125472'
+      DONOR_TAIL_SIZE: '2092004'
+
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+
+      - name: Checkout exact QASSA donor DTB payload
+        uses: actions/checkout@v4
+        with:
+          repository: riwutzsitepu-prog/trial-kernel
+          ref: aa24e82bacd6ccaf9bca7937a7e2ad99867ab5ad
+          path: donor_repo
+
+      - name: Download successful 4.14.150 base artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CahAzzu-4.14.150
+          path: base
+          repository: riwutzsitepu-prog/build-ksunex-surya
+          run-id: ${{ env.BASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Extract pure 4.14.150 Image.gz
+        run: |
+          set -euxo pipefail
+          test -s base/CahAzzu.zip
+          rm -rf oldzip
+          mkdir oldzip
+          unzip -q base/CahAzzu.zip -d oldzip
+          test -s oldzip/Image.gz-dtb
+
+          python3 - <<'PY'
+          import zlib
+          from pathlib import Path
+          blob=Path("oldzip/Image.gz-dtb").read_bytes()
+          d=zlib.decompressobj(16+zlib.MAX_WBITS)
+          raw=d.decompress(blob)+d.flush()
+          tail=d.unused_data
+          if not tail:
+              raise SystemExit("base native DTB tail missing")
+          pure=blob[:-len(tail)]
+          Path("Image.gz").write_bytes(pure)
+          Path("CahAzzu-Image").write_bytes(raw)
+          Path("old-native-dtb-tail.img").write_bytes(tail)
+          print("pure_image_gz_bytes", len(pure))
+          print("old_native_dtb_bytes", len(tail))
+          PY
+
+          gzip -t Image.gz
+          strings CahAzzu-Image | grep -q '4.14.150-CahAzzu'
+          strings CahAzzu-Image | grep -q '/data/adb/ksud'
+          sha256sum Image.gz old-native-dtb-tail.img
+
+      - name: Reconstruct exact boot-proven QASSA 12-DTB tail
+        run: |
+          set -euxo pipefail
+          PART_DIR=donor_repo/staging_exact_final
+          mkdir -p donor_exact
+          B64=donor_exact/qassa_donor_12dtb.tail.xz.b64
+          XZ=donor_exact/qassa_donor_12dtb.tail.xz
+          TAIL=donor_exact/qassa_donor_12dtb.tail
+
+          test "$(find "$PART_DIR" -maxdepth 1 -type f -name 'part*' | wc -l)" = "30"
+          cat "$PART_DIR"/part* > "$B64"
+          test "$(stat -c %s "$B64")" = "$DONOR_B64_SIZE"
+          echo "$DONOR_B64_SHA256  $B64" | sha256sum -c -
+
+          base64 -d "$B64" > "$XZ"
+          test "$(stat -c %s "$XZ")" = "$DONOR_XZ_SIZE"
+          echo "$DONOR_XZ_SHA256  $XZ" | sha256sum -c -
+
+          xz -dc "$XZ" > "$TAIL"
+          test "$(stat -c %s "$TAIL")" = "$DONOR_TAIL_SIZE"
+          echo "$EXPECTED_DTB_SHA256  $TAIL" | sha256sum -c -
+
+          python3 donor_repo/verify_test4_donor.py "$TAIL" \
+            --out-dir donor_exact/fdts \
+            --report donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_VALIDATION=PASS$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_COUNT=12$' donor_exact/FDT_VALIDATION.txt
+          grep -q '^FDT_LEFTOVER_BYTES=0$' donor_exact/FDT_VALIDATION.txt
+
+      - name: Assemble 4.14.150 plus exact QASSA 12-DTB
+        run: |
+          set -euxo pipefail
+          cat Image.gz donor_exact/qassa_donor_12dtb.tail > Image.gz-dtb
+
+          python3 - <<'PY'
+          import hashlib, os, zlib
+          from pathlib import Path
+          blob=Path("Image.gz-dtb").read_bytes()
+          d=zlib.decompressobj(16+zlib.MAX_WBITS)
+          raw=d.decompress(blob)+d.flush()
+          tail=d.unused_data
+          if len(tail) != int(os.environ["DONOR_TAIL_SIZE"]):
+              raise SystemExit("final DTB tail size mismatch")
+          if hashlib.sha256(tail).hexdigest() != os.environ["EXPECTED_DTB_SHA256"]:
+              raise SystemExit("final DTB tail hash mismatch")
+          Path("final-Image").write_bytes(raw)
+          Path("final-dtb-tail.img").write_bytes(tail)
+          PY
+
+          strings final-Image | grep -q '4.14.150-CahAzzu'
+          strings final-Image | grep -q '/data/adb/ksud'
+          sha256sum Image.gz Image.gz-dtb final-dtb-tail.img | tee compiled-hashes.txt
+
+      - name: Repack CahAzzu
+        run: |
+          set -euxo pipefail
+          cp Image.gz-dtb oldzip/Image.gz-dtb
+          cp donor_exact/FDT_VALIDATION.txt oldzip/FDT_VALIDATION.txt
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("oldzip/anykernel.sh")
+          s=p.read_text()
+          s=s.replace('ui_print "Donor-line native surya DTB";',
+                      'ui_print "Exact QASSA 12-DTB donor tail";')
+          p.write_text(s)
+          PY
+
+          rm -f CahAzzu.zip CahAzzu.zip.sha256
+          (
+            cd oldzip
+            zip -r9 ../CahAzzu.zip . >/dev/null
+          )
+          unzip -tq CahAzzu.zip
+          unzip -l CahAzzu.zip | grep -F 'Image.gz-dtb'
+          unzip -l CahAzzu.zip | grep -F 'FDT_VALIDATION.txt'
+          ! unzip -l CahAzzu.zip | grep -q 'dtbo.img'
+          sha256sum CahAzzu.zip | tee CahAzzu.zip.sha256
+
+      - name: Upload final QASSA12DTB CahAzzu
+        uses: actions/upload-artifact@v4
+        with:
+          name: CahAzzu-4.14.150-QASSA12DTB
+          path: |
+            CahAzzu.zip
+            CahAzzu.zip.sha256
+            compiled-hashes.txt
+            FDT_VALIDATION.txt
+          if-no-files-found: error
