@@ -124,7 +124,7 @@ jobs:
           grep -q '^# CONFIG_BUILD_ARM64_DT_OVERLAY is not set$' out/.config
           cp out/.config "$GITHUB_WORKSPACE/rethinking-qnative2.config"
 
-      - name: Build QNATIVE2 kernel and base DTBs
+      - name: Build QNATIVE2 kernel and base DTB only
         run: |
           set -o pipefail
           cd kernel
@@ -132,7 +132,13 @@ jobs:
           export USE_CCACHE=1
           export KBUILD_BUILD_HOST=builder
           export KBUILD_BUILD_USER=khayloaf
-          make -j"$(nproc --all)" O=out ARCH=arm64 CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          COMMON_ARGS="O=out ARCH=arm64 CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_COMPAT=arm-linux-gnueabi- LLVM=1 LLVM_IAS=1"
+
+          make -j"$(nproc --all)" $COMMON_ARGS Image.gz 2>&1 | tee "$GITHUB_WORKSPACE/build-kernel.log"
+          make -j"$(nproc --all)" $COMMON_ARGS qcom/sdmmagpie-idp.dtb 2>&1 | tee "$GITHUB_WORKSPACE/build-dtb.log"
+          cat "$GITHUB_WORKSPACE/build-kernel.log" "$GITHUB_WORKSPACE/build-dtb.log" > "$GITHUB_WORKSPACE/build.log"
+
           test -s out/arch/arm64/boot/Image
           test -s out/arch/arm64/boot/Image.gz
           test -s out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb
@@ -140,7 +146,7 @@ jobs:
           cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/Image.gz"
           cp out/arch/arm64/boot/dts/qcom/sdmmagpie-idp.dtb "$GITHUB_WORKSPACE/sdmmagpie-idp.dtb"
           strings out/arch/arm64/boot/Image | grep -m1 '^Linux version ' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
-          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\.14\.357-rethinking-Q10-N2'
+          strings out/arch/arm64/boot/Image | grep -q '^Linux version 4\\.14\\.357-rethinking-Q10-N2'
 
       - name: Validate native Q SDMMAGPIE IDP DTB
         run: |
