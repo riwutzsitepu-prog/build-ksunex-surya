@@ -119,6 +119,26 @@ jobs:
           grep -q 'ksu_handle_sys_read' fs/read_write.c
           grep -q 'ksu_handle_prctl' security/security.c
 
+      - name: Fix donor-line cpuset assist compile guard
+        working-directory: kernel
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("kernel/cgroup/cpuset.c")
+          s=p.read_text()
+          start=s.find("static ssize_t cpuset_write_resmask_assist")
+          end=s.find("static ssize_t cpuset_write_resmask_wrapper", start)
+          if start < 0 or end < 0:
+              raise SystemExit("cpuset assist helper boundaries not found")
+          prefix=s[max(0,start-80):start]
+          if "#ifdef CONFIG_CPUSET_ASSIST" not in prefix:
+              block=s[start:end]
+              s=s[:start]+"#ifdef CONFIG_CPUSET_ASSIST\n"+block+"#endif\n\n"+s[end:]
+              p.write_text(s)
+          PY
+          grep -B1 'static ssize_t cpuset_write_resmask_assist' kernel/cgroup/cpuset.c | grep -q '#ifdef CONFIG_CPUSET_ASSIST'
+
       - name: Configure exact donor hardware config
         working-directory: kernel
         run: |
