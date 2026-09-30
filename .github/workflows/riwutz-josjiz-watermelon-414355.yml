@@ -26,7 +26,7 @@ jobs:
       KERNEL_NAME: riwutz_josjiz
       ZIP_NAME: riwutz_josjiz.zip
       CLANG_URL: https://github.com/greenforce-project/greenforce_clang/releases/download/24072024/greenforce-clang-20.0.0git-24072024.tar.zst
-      CLANG_SHA256: 2fe289e31e9ad2d8252b5422c7f0f15eec68024aa8fed08f9acb840113a5edd2
+      CLANG_SHA256: 1bdea29ba34c13b672803d3ef26adbb955a33cb79cd4b6c8a6e01f545b61da52
       LLVM_COMMIT: e59a619acf0b829f34a1c63aab0ad829ca0defc9
 
     steps:
