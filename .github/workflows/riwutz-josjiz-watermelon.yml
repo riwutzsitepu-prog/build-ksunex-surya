@@ -111,7 +111,7 @@ jobs:
           grep -q 'ksu_handle_execveat_ksud' fs/exec.c
           grep -q 'ksu_handle_execveat_sucompat' fs/exec.c
           grep -q 'ksu_handle_faccessat' fs/open.c
-          grep -q 'ksu_handle_sys_read' fs/read_write.c
+          grep -q 'ksu_handle_vfs_read' fs/read_write.c
           grep -q 'ksu_handle_stat' fs/stat.c
           grep -q 'ksu_handle_input_handle_event' drivers/input/input.c
           grep -q 'ksu_handle_devpts' drivers/tty/pty.c
