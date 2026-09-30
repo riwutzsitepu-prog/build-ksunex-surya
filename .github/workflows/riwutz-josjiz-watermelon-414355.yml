@@ -5,6 +5,8 @@ on:
   push:
     paths:
       - '.github/workflows/riwutz-josjiz-watermelon-414355.yml'
+      - 'scripts/riwutz_josjiz_ksu_compat.py'
+      - 'scripts/riwutz_josjiz_kernel_compat.py'
 
 permissions:
   contents: read
@@ -92,181 +94,65 @@ jobs:
           fi
           cd ..
 
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          p = Path('ksu-next/kernel/core_hook.c')
-          s = p.read_text()
-
-          marker = 'static bool ksu_module_mounted = false;\n'
-          susfs_head = '''#ifdef CONFIG_KSU_SUSFS
-          bool susfs_is_allow_su(void)
-          {
-          \tif (ksu_is_manager()) {
-          \t\treturn true;
-          \t}
-          \treturn ksu_is_allow_uid(current_uid().val);
-          }
-
-          extern u32 susfs_zygote_sid;
-          extern void susfs_run_try_umount_for_current_mnt_ns(void);
-          extern bool susfs_is_mnt_devname_ksu(struct path *path);
-          #endif // CONFIG_KSU_SUSFS
-
-          '''
-          if 'bool susfs_is_allow_su(void)' not in s:
-              if marker not in s:
-                  raise SystemExit('core_hook: module_mounted anchor missing')
-              s = s.replace(marker, susfs_head + marker, 1)
-
-          s = s.replace('extern int handle_sepolicy(', 'extern int ksu_handle_sepolicy(', 1)
-          s = re.sub(r'(?<![A-Za-z0-9_])is_manager\(\)', 'ksu_is_manager()', s)
-
-          mount_anchor = '\tif (is_non_appuid(new_uid)) {\n'
-          mount_block = '''#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-          \tbool is_zygote_child = susfs_is_sid_equal(old->security, susfs_zygote_sid);
-          \tif (likely(is_zygote_child)) {
-          \t\tif (unlikely(new_uid.val < 10000 && new_uid.val >= 1000)) {
-          \t\t\tstruct path path;
-          \t\t\tif (!kern_path("/data/adb/susfs_umount_for_zygote_system_process", 0, &path)) {
-          \t\t\t\tpath_put(&path);
-          \t\t\t\tgoto out_ksu_try_umount;
-          \t\t\t}
-          \t\t}
-          \t}
-          #endif
-
-          '''
-          if 'susfs_is_sid_equal(old->security, susfs_zygote_sid)' not in s:
-              if mount_anchor not in s:
-                  raise SystemExit('core_hook: is_non_appuid anchor missing')
-              s = s.replace(mount_anchor, mount_block + mount_anchor, 1)
-
-          zygote_old = '\tif (!is_zygote(old->security)) {\n'
-          zygote_new = '''#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-          \tif (!is_zygote_child) {
-          #else
-          \tif (!ksu_is_zygote(old->security)) {
-          #endif
-          '''
-          if zygote_old in s:
-              s = s.replace(zygote_old, zygote_new, 1)
-          elif 'if (!ksu_is_zygote(old->security))' not in s and 'if (!is_zygote_child)' not in s:
-              raise SystemExit('core_hook: zygote check anchor missing')
-
-          s = re.sub(r'(?<![A-Za-z0-9_])try_umount\(', 'ksu_try_umount(', s)
-
-          start = '\t// fixme: use `collect_mounts` and `iterate_mount` to iterate all mountpoint and\n'
-          if '#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT\n\t// susfs comes first' not in s:
-              if start not in s:
-                  raise SystemExit('core_hook: umount block start missing')
-              s = s.replace(start,
-                  '#ifdef CONFIG_KSU_SUSFS_TRY_UMOUNT\n'
-                  '\t// susfs comes first; preserve v1.1.1 isolated-app behavior\n'
-                  '\tsusfs_try_umount_all(new_uid.val);\n'
-                  '#else\n' + start, 1)
-              end = '\tksu_try_umount("/system/etc/hosts", false, MNT_DETACH);\n\n\t// try umount lsposed dex2oat bins\n'
-              if end not in s:
-                  raise SystemExit('core_hook: umount block end missing')
-              s = s.replace(end,
-                  '\tksu_try_umount("/system/etc/hosts", false, MNT_DETACH);\n'
-                  '#endif\n\n'
-                  '\t// try umount lsposed dex2oat bins\n', 1)
-
-          required_core = [
-              'bool susfs_is_allow_su(void)',
-              'extern int ksu_handle_sepolicy(',
-              'susfs_is_sid_equal(old->security, susfs_zygote_sid)',
-              'out_ksu_try_umount:',
-              'susfs_try_umount_all(new_uid.val);',
-              'ksu_try_umount("/system", true, 0);',
-          ]
-          for token in required_core:
-              if token not in s:
-                  raise SystemExit(f'core_hook compatibility token missing: {token}')
-          p.write_text(s)
-
-          p = Path('ksu-next/kernel/selinux/rules.c')
-          s = p.read_text()
-          s = s.replace('void apply_kernelsu_rules()', 'void ksu_apply_kernelsu_rules()', 1)
-          s = s.replace('int handle_sepolicy(', 'int ksu_handle_sepolicy(', 1)
-          s = re.sub(r'(?<![A-Za-z0-9_])getenforce\(\)', 'ksu_getenforce()', s)
-
-          if 'susfs_set_zygote_sid();' not in s:
-              anchor = '\tmutex_unlock(&ksu_rules);\n'
-              block = '''#ifdef CONFIG_KSU_SUSFS
-          \tksu_allow(db, "zygote", "labeledfs", "filesystem", "unmount");
-          \tsusfs_set_init_sid();
-          \tsusfs_set_ksu_sid();
-          \tsusfs_set_zygote_sid();
-          #endif
-
-          '''
-              if anchor not in s:
-                  raise SystemExit('selinux rules: mutex_unlock anchor missing')
-              s = s.replace(anchor, block + anchor, 1)
-
-          required_rules = [
-              'void ksu_apply_kernelsu_rules()',
-              'int ksu_handle_sepolicy(',
-              'ksu_getenforce()',
-              'susfs_set_init_sid();',
-              'susfs_set_ksu_sid();',
-              'susfs_set_zygote_sid();',
-          ]
-          for token in required_rules:
-              if token not in s:
-                  raise SystemExit(f'selinux rules compatibility token missing: {token}')
-          p.write_text(s)
-
-          p = Path('ksu-next/kernel/Makefile')
-          s = p.read_text()
-          start = s.find('# .git is a text file')
-          end = s.find('ifeq ($(shell grep -q " current_sid(void)"', start)
-          if start < 0 or end < 0:
-              raise SystemExit('Could not locate KSU version block')
-          forced = ('KSU_VERSION := 12851\n'
-                    '$(info -- KernelSU-Next version: $(KSU_VERSION))\n'
-                    'ccflags-y += -DKSU_VERSION=$(KSU_VERSION)\n\n')
-          p.write_text(s[:start] + forced + s[end:])
-          PY
-
+          python3 scripts/riwutz_josjiz_ksu_compat.py
           find ksu-next/kernel -name '*.rej' -delete
           find ksu-next/kernel -name '*.orig' -delete
-
-          python3 - <<'PY'
-          from pathlib import Path
-          for rel in (
-              'ksu-next/kernel/Kconfig',
-              'ksu-next/kernel/selinux/selinux.c',
-              'ksu-next/kernel/sucompat.c',
-          ):
-              p = Path(rel)
-              lines = [line.rstrip() for line in p.read_text().splitlines()]
-              while lines and not lines[-1]:
-                  lines.pop()
-              p.write_text('\n'.join(lines) + '\n')
-          PY
-
           grep -q '^KSU_VERSION := 12851$' ksu-next/kernel/Makefile
           grep -q 'bool susfs_is_allow_su(void)' ksu-next/kernel/core_hook.c
           grep -q 'susfs_try_umount_all(new_uid.val)' ksu-next/kernel/core_hook.c
           grep -q 'void ksu_apply_kernelsu_rules()' ksu-next/kernel/selinux/rules.c
           grep -q 'int ksu_handle_sepolicy' ksu-next/kernel/selinux/rules.c
           grep -q 'susfs_set_zygote_sid' ksu-next/kernel/selinux/rules.c
-          ! find ksu-next/kernel -name '*.rej' -print -quit | grep -q .
           git -C ksu-next diff --check
 
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src = Path('susfs/kernel_patches/0002-fs-Implement-susfs-v1.5.3.patch').read_text()
+          parts = src.split('diff --git ')
+          out = [parts[0]]
+          for part in parts[1:]:
+              first = part.splitlines()[0] if part.splitlines() else ''
+              m = re.match(r'a/(\S+) b/(\S+)', first)
+              if m and (m.group(1).endswith('.rej') or m.group(2).endswith('.rej')):
+                  continue
+              out.append('diff --git ' + part)
+          Path('/tmp/susfs-kernel-clean.patch').write_text(''.join(out))
+          PY
+
           cd kernel
-          patch -p1 --forward < ../susfs/kernel_patches/0002-fs-Implement-susfs-v1.5.3.patch
-          rm -rf drivers/kernelsu
-          ln -s ../../ksu-next/kernel drivers/kernelsu
-          grep -q 'kernelsu' drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
-          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          test -f fs/susfs.c
-          test -f include/linux/susfs.h
-          test -f drivers/kernelsu/Kconfig
+          set +e
+          patch -p1 --forward < /tmp/susfs-kernel-clean.patch
+          KERNEL_PATCH_RC=$?
+          set -e
+          if [ "$KERNEL_PATCH_RC" -ne 0 ]; then
+            mapfile -t REJECTS < <(find . -name '*.rej' -print | sed 's#^./##' | sort)
+            printf 'Known Watermelon 4.14.355 SUSFS rejects:\n%s\n' "${REJECTS[*]}"
+            test "${#REJECTS[@]}" -eq 4
+            test "${REJECTS[0]}" = "fs/dcache.c.rej"
+            test "${REJECTS[1]}" = "fs/proc/cmdline.c.rej"
+            test "${REJECTS[2]}" = "fs/proc/task_mmu.c.rej"
+            test "${REJECTS[3]}" = "kernel/sys.c.rej"
+          fi
+          cd ..
+
+          python3 scripts/riwutz_josjiz_kernel_compat.py
+          find kernel -name '*.rej' -delete
+          find kernel -name '*.orig' -delete
+
+          test -f kernel/fs/susfs.c
+          test -f kernel/include/linux/susfs.h
+          grep -q 'susfs_spoof_cmdline_or_bootconfig' kernel/fs/proc/cmdline.c
+          grep -q 'susfs_sus_ino_for_show_map_vma' kernel/fs/proc/task_mmu.c
+          grep -q 'susfs_spoof_uname(&tmp)' kernel/kernel/sys.c
+          grep -q 'TASK_STRUCT_NON_ROOT_USER_APP_PROC' kernel/fs/dcache.c
+          ! find kernel -name '*.rej' -print -quit | grep -q .
+
+          rm -rf kernel/drivers/kernelsu
+          ln -s ../../ksu-next/kernel kernel/drivers/kernelsu
+          grep -q 'kernelsu' kernel/drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> kernel/drivers/Makefile
+          grep -q 'drivers/kernelsu/Kconfig' kernel/drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' kernel/drivers/Kconfig
+          test -f kernel/drivers/kernelsu/Kconfig
 
       - name: Apply targeted Wi-Fi toggle stabilization patch
         run: |
@@ -276,18 +162,10 @@ jobs:
           from pathlib import Path
           p = Path('drivers/staging/qcacld-3.0/Kbuild')
           s = p.read_text()
-          old = '''ifeq ($(CONFIG_WLAN_NAPI), y)
-          cppflags-y += -DFEATURE_NAPI
-          ifneq ($(CONFIG_IRQ_SBALANCE), y)
-          cppflags-y += -DHIF_IRQ_AFFINITY
-          endif
-          ifeq ($(CONFIG_WLAN_NAPI_DEBUG), y)'''
-          new = '''ifeq ($(CONFIG_WLAN_NAPI), y)
-          cppflags-y += -DFEATURE_NAPI
-          ifeq ($(CONFIG_WLAN_NAPI_DEBUG), y)'''
+          old = 'ifneq ($(CONFIG_IRQ_SBALANCE), y)\ncppflags-y += -DHIF_IRQ_AFFINITY\nendif\n'
           if old not in s:
               raise SystemExit('Expected HIF_IRQ_AFFINITY block not found')
-          p.write_text(s.replace(old, new, 1))
+          p.write_text(s.replace(old, '', 1))
           PY
           ! grep -A4 -B2 'FEATURE_NAPI' drivers/staging/qcacld-3.0/Kbuild | grep -q HIF_IRQ_AFFINITY
           git diff -- drivers/staging/qcacld-3.0/Kbuild | tee "$GITHUB_WORKSPACE/wifi-fix.diff"
@@ -307,6 +185,8 @@ jobs:
           scripts/config --file out/.config --enable KSU_SUSFS
           scripts/config --file out/.config --disable KSU_SUSFS_SUS_SU
           make LLVM=1 olddefconfig
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' out/.config
           grep -q '^CONFIG_KSU=y$' out/.config
           grep -q '^CONFIG_KSU_SUSFS=y$' out/.config
           grep -q '^# CONFIG_KSU_SUSFS_SUS_SU is not set$' out/.config
@@ -315,7 +195,6 @@ jobs:
           cp out/arch/arm64/boot/Image.gz "$GITHUB_WORKSPACE/payload/a11_a12/"
           cp out/arch/arm64/boot/dtb.img "$GITHUB_WORKSPACE/payload/a11_a12/"
           cp out/arch/arm64/boot/dtbo.img "$GITHUB_WORKSPACE/payload/a11_a12/"
-          strings out/arch/arm64/boot/Image.gz | grep -m1 -E 'Linux version|riwutz_josjiz' || true
 
       - name: Build Android 10 payload with SchedTune compatibility
         run: |
@@ -335,6 +214,7 @@ jobs:
           scripts/config --file out/.config --disable UCLAMP_TASK_GROUP
           scripts/config --file out/.config --enable SCHED_TUNE
           make LLVM=1 olddefconfig
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
           grep -q '^CONFIG_KSU=y$' out/.config
           grep -q '^CONFIG_KSU_SUSFS=y$' out/.config
           grep -q '^CONFIG_SCHED_TUNE=y$' out/.config
@@ -360,7 +240,7 @@ jobs:
           ## riwutz_josjiz universal Watermelon 4.14.355
 
           properties() { '
-          kernel.string=riwutz_josjiz | POCO X3 NFC surya/karna
+          kernel.string=riwutz_josjiz
           do.devicecheck=1
           do.modules=0
           do.systemless=1
