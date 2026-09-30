@@ -1,0 +1,311 @@
+name: riwutz_josjiz Watermelon 4.14.355 Universal
+
+on:
+  push:
+    branches:
+      - 'project/riwutz_josjiz-watermelon-414355'
+    paths:
+      - '.github/workflows/riwutz-josjiz-watermelon-414355.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      KERNEL_REPO: https://github.com/xradens/msm-4.14.git
+      KERNEL_BASE: 95dffb0397b21a8a54fefec47801ab460be5532f
+      WIFI_FIX: 238de8f97899fb0f945493f7075c3cd3483f69f1
+      KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next.git
+      KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
+      KSU_TAG: v1.1.1
+      SUSFS_REPO: https://github.com/kutemeikito/susfs4ksu.git
+      SUSFS_COMMIT: 96750ec8cb280c22534875ebaaad360cefdec77b
+      CLANG_REPO: https://bitbucket.org/rdxzv/clang-standalone.git
+      CLANG_BRANCH: '20'
+      ZIP_NAME: riwutz_josjiz.zip
+      TAG_NAME: riwutz_josjiz-watermelon-414355
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl file flex git \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev \
+            make patch python3 python-is-python3 rsync unzip xz-utils zip zstd
+
+      - name: Checkout exact Watermelon 4.14.355 source
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_BASE"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_BASE"
+          grep -q '^VERSION = 4$' Makefile
+          grep -q '^PATCHLEVEL = 14$' Makefile
+          grep -q '^SUBLEVEL = 355$' Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/watermelon-source.txt"
+
+      - name: Apply targeted Wi-Fi stop/start latency fix
+        run: |
+          set -euxo pipefail
+          cd kernel
+          git fetch --depth=1 origin "$WIFI_FIX"
+          git cherry-pick --no-commit FETCH_HEAD
+          test ! -e .git/CHERRY_PICK_HEAD || git reset
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c')
+          s = p.read_text()
+          if '#ifdef QDF_ENABLE_TRACING\nstatic void umac_stop_complete_cb' in s:
+              raise SystemExit('Wi-Fi fix was not applied: conditional callback remains')
+          if 'qdf_event_set(stop_evt)' not in s:
+              raise SystemExit('Wi-Fi fix missing qdf_event_set(stop_evt)')
+          print('WIFI_FIX=PASS')
+          PY
+          git diff -- drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c | tee "$GITHUB_WORKSPACE/wifi-fix.patch.txt"
+
+      - name: Prepare Watermelon Clang 20
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" clang-20
+          test -x clang-20/bin/clang
+          clang-20/bin/clang --version | head -n4 | tee compiler.txt
+
+      - name: Integrate KernelSU Next v1.1.1 exactly
+        run: |
+          set -euxo pipefail
+          cd kernel
+          git clone "$KSU_REPO" KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next describe --tags --exact-match)" = "$KSU_TAG"
+          rm -rf drivers/kernelsu
+          ln -s ../KernelSU-Next/kernel drivers/kernelsu
+          grep -q 'obj-$(CONFIG_KSU).*kernelsu/' drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
+            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          fi
+          git -C KernelSU-Next rev-parse HEAD | tee "$GITHUB_WORKSPACE/ksunext-source.txt"
+
+      - name: Integrate SUSFS v1.5.4 for Linux 4.14
+        run: |
+          set -euxo pipefail
+          git init susfs4ksu
+          cd susfs4ksu
+          git remote add origin "$SUSFS_REPO"
+          git fetch --depth=1 origin "$SUSFS_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SUSFS_COMMIT"
+          cd "$GITHUB_WORKSPACE/kernel"
+          cp -f ../susfs4ksu/kernel_patches/fs/* fs/
+          cp -f ../susfs4ksu/kernel_patches/include/linux/* include/linux/
+          patch -p1 --forward < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch
+          cd KernelSU-Next
+          set +e
+          patch -p1 --forward < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch | tee "$GITHUB_WORKSPACE/susfs-ksu-patch.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo 'SUSFS_KSU_PATCH_FAILED=1' | tee "$GITHUB_WORKSPACE/SUSFS_PATCH_STATUS.txt"
+            find . -name '*.rej' -print -exec sh -c 'echo === $1; cat "$1"' _ {} \; | tee "$GITHUB_WORKSPACE/susfs-rejects.txt"
+            exit "$rc"
+          fi
+          cd "$GITHUB_WORKSPACE/kernel"
+          grep -q 'SUSFS_VERSION.*1.5.4' include/linux/susfs.h
+          echo 'SUSFS_KSU_PATCH_FAILED=0' | tee "$GITHUB_WORKSPACE/SUSFS_PATCH_STATUS.txt"
+
+      - name: Configure riwutz_josjiz
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang-20/bin:$PATH"
+          make O=out ARCH=arm64 LLVM=1 surya_defconfig
+          scripts/config --file out/.config --set-str LOCALVERSION '-riwutz_josjiz'
+          scripts/config --file out/.config -d LOCALVERSION_AUTO
+          scripts/config --file out/.config -e OVERLAY_FS
+          scripts/config --file out/.config -e KPROBES
+          scripts/config --file out/.config -e KRETPROBES
+          scripts/config --file out/.config -e KSU
+          scripts/config --file out/.config -e KSU_KPROBES_HOOK
+          scripts/config --file out/.config -e KSU_LSM_SECURITY_HOOKS
+          scripts/config --file out/.config -e KSU_SUSFS
+          scripts/config --file out/.config -e COMPAT
+          make O=out ARCH=arm64 LLVM=1 olddefconfig
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' out/.config
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS=y$' out/.config
+          cp out/.config "$GITHUB_WORKSPACE/riwutz_josjiz.config"
+
+      - name: Build riwutz_josjiz 4.14.355
+        run: |
+          set -o pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang-20/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=riwutz
+          export KBUILD_BUILD_HOST=josjiz
+          make O=out -j"$(nproc)" ARCH=arm64 LLVM=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz dtb.img dtbo.img 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Validate kernel identity and features
+        run: |
+          set -euxo pipefail
+          IMG_GZ=kernel/out/arch/arm64/boot/Image.gz
+          test -s "$IMG_GZ"
+          test -s kernel/out/arch/arm64/boot/dtb.img
+          test -s kernel/out/arch/arm64/boot/dtbo.img
+          gzip -dc "$IMG_GZ" > Image.raw
+          strings Image.raw | grep -m1 '^Linux version ' | tee kernel-version.txt
+          strings Image.raw | grep -q '^Linux version 4\.14\.355-riwutz_josjiz '
+          strings Image.raw | grep -q '/data/adb/ksud'
+          strings Image.raw | grep -q 'susfs is initialized! version: v1.5.4'
+          grep -q 'KernelSU-Next version:' build.log
+          KSU_VER="$(grep -oE 'KernelSU-Next version: [0-9]+' build.log | tail -n1 | awk '{print $3}')"
+          echo "KSU_KERNEL_VERSION=$KSU_VER" | tee ksu-version.txt
+          test "$KSU_VER" = '12851'
+          sha256sum "$IMG_GZ" kernel/out/arch/arm64/boot/dtb.img kernel/out/arch/arm64/boot/dtbo.img | tee payload-sha256.txt
+
+      - name: Package A10 + A11/A12 autodetect ZIP
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 -b oss https://github.com/xradens/AnyKernel3.git ak3
+          rm -rf ak3/.git ak3/.github
+          rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb ak3/dtb.img ak3/dtbo.img
+          mkdir -p ak3/variants/a10 ak3/variants/a11_12
+          cp kernel/out/arch/arm64/boot/Image.gz ak3/variants/a10/Image.gz
+          cp kernel/out/arch/arm64/boot/dtb.img ak3/variants/a10/dtb.img
+          cp kernel/out/arch/arm64/boot/Image.gz ak3/variants/a11_12/Image.gz
+          cp kernel/out/arch/arm64/boot/dtb.img ak3/variants/a11_12/dtb.img
+          cp kernel/out/arch/arm64/boot/dtbo.img ak3/variants/a11_12/dtbo.img
+
+          cat > ak3/anykernel.sh <<'AK3'
+          ### AnyKernel3
+          properties() { '
+          kernel.string=riwutz_josjiz
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=1
+          device.name1=surya
+          device.name2=karna
+          supported.versions=10-12
+          '; }
+
+          BLOCK=/dev/block/bootdevice/by-name/boot;
+          IS_SLOT_DEVICE=0;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          . tools/ak3-core.sh;
+
+          android_ver="$(file_getprop /system/build.prop ro.build.version.release 2>/dev/null | cut -d. -f1)";
+          [ -n "$android_ver" ] || android_ver="$(file_getprop /system/system/build.prop ro.build.version.release 2>/dev/null | cut -d. -f1)";
+          [ -n "$android_ver" ] || android_ver="$(file_getprop /vendor/build.prop ro.build.version.release 2>/dev/null | cut -d. -f1)";
+
+          rm -f Image Image.gz Image.gz-dtb dtb dtb.img dtbo.img;
+          case "$android_ver" in
+            10)
+              ui_print 'riwutz_josjiz: Android 10 path';
+              ui_print 'Keeping ROM DTBO for A10 vendor compatibility';
+              cp variants/a10/Image.gz Image.gz;
+              cp variants/a10/dtb.img dtb.img;
+              ;;
+            11|12)
+              ui_print "riwutz_josjiz: Android $android_ver path";
+              ui_print 'Using Watermelon DTB + DTBO';
+              cp variants/a11_12/Image.gz Image.gz;
+              cp variants/a11_12/dtb.img dtb.img;
+              cp variants/a11_12/dtbo.img dtbo.img;
+              ;;
+            *)
+              abort "Unsupported Android version: $android_ver. Only Android 10/11/12.";
+              ;;
+          esac
+
+          ui_print 'Linux 4.14.355';
+          ui_print 'KernelSU Next v1.1.1 / 12851';
+          ui_print 'SUSFS v1.5.4';
+          ui_print 'Wi-Fi stop/start latency fix: enabled';
+          dump_boot;
+          write_boot;
+          AK3
+          chmod 755 ak3/anykernel.sh
+
+          cat > ak3/riwutz_josjiz-INFO.txt <<EOF
+          Kernel name: riwutz_josjiz
+          Linux base: 4.14.355 Watermelon
+          Watermelon source: $KERNEL_BASE
+          Wi-Fi fix: $WIFI_FIX (umac_stop_complete_cb event completion)
+          KernelSU Next: v1.1.1 / 12851 ($KSU_COMMIT)
+          SUSFS: v1.5.4 ($SUSFS_COMMIT)
+          Device: Poco X3 NFC surya / karna
+          Android: 10, 11, 12
+          A10 installer: preserves ROM DTBO
+          A11/A12 installer: uses Watermelon DTB + DTBO
+          EOF
+
+          (cd ak3 && zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" . -x '*.git*' 'README.md' '*placeholder')
+          unzip -tq "$ZIP_NAME"
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz-diagnostics
+          if-no-files-found: ignore
+          path: |
+            build.log
+            compiler.txt
+            kernel-version.txt
+            ksu-version.txt
+            payload-sha256.txt
+            wifi-fix.patch.txt
+            SUSFS_PATCH_STATUS.txt
+            susfs-ksu-patch.log
+            susfs-rejects.txt
+            riwutz_josjiz.config
+
+      - name: Upload flashable ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz
+          path: |
+            riwutz_josjiz.zip
+            riwutz_josjiz.zip.sha256
+
+      - name: Publish prerelease
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: riwutz_josjiz
+          prerelease: true
+          body: |
+            riwutz_josjiz for Poco X3 NFC surya/karna.
+            Watermelon Linux 4.14.355, KernelSU Next v1.1.1 / 12851, SUSFS v1.5.4.
+            One ZIP autodetects Android 10 versus Android 11/12.
+            Android 10 preserves the ROM DTBO; Android 11/12 uses the Watermelon DTB/DTBO.
+            Includes the qcacld Wi-Fi stop/start completion fix for the long Wi-Fi re-enable stall.
+          files: |
+            riwutz_josjiz.zip
+            riwutz_josjiz.zip.sha256
+            kernel-version.txt
+            ksu-version.txt
+            payload-sha256.txt
+          fail_on_unmatched_files: true
