@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/riwutz-josjiz-watermelon.yml'
+      - 'patches/riwutz_josjiz-wifi-power-cycle.patch'
   workflow_dispatch:
 
 permissions:
@@ -57,11 +58,18 @@ jobs:
         run: |
           set -euxo pipefail
           cd kernel
-          git fetch --depth=1 origin "$WIFI_FIX_COMMIT"
-          git -c user.name=riwutz -c user.email=actions@localhost cherry-pick "$WIFI_FIX_COMMIT"
-          git show --stat --oneline HEAD | tee "$GITHUB_WORKSPACE/wifi-fix.txt"
-          grep -R -n 'umac_stop_complete_cb' drivers/staging/qcacld-3.0 | head -n 10
-          grep -R -n 'qdf_event_set(stop_evt)' drivers/staging/qcacld-3.0 | head -n 10
+          PATCH="$GITHUB_WORKSPACE/patches/riwutz_josjiz-wifi-power-cycle.patch"
+          test -s "$PATCH"
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          git diff --check
+          git diff -- drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c | tee "$GITHUB_WORKSPACE/wifi-fix.txt"
+          grep -n 'qdf_event_set(stop_evt)' drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c
+          if grep -A14 -B3 'static void umac_stop_complete_cb' drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c | grep -q '#ifdef QDF_ENABLE_TRACING'; then
+            echo 'Wi-Fi fix was not applied cleanly' >&2
+            exit 1
+          fi
+          echo "Source fix: $WIFI_FIX_COMMIT" >> "$GITHUB_WORKSPACE/wifi-fix.txt"
 
       - name: Prepare ClangBuiltLinux 20 toolchain
         run: |
