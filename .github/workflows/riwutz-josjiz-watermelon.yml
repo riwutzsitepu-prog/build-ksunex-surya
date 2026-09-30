@@ -1,0 +1,209 @@
+name: riwutz_josjiz Watermelon 4.14.355
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/riwutz-josjiz-watermelon.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    env:
+      KERNEL_REPO: https://github.com/xradens/msm-4.14.git
+      KERNEL_COMMIT: 95dffb0397b21a8a54fefec47801ab460be5532f
+      WIFI_FIX_COMMIT: 238de8f97899fb0f945493f7075c3cd3483f69f1
+      KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next.git
+      KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
+      KSU_TAG: v1.1.1
+      KSU_VERSION_EXPECTED: '12851'
+      ZIP_NAME: riwutz_josjiz.zip
+
+    steps:
+      - name: Checkout build repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl file flex git \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev \
+            make python3 python-is-python3 rsync unzip xz-utils zip zstd
+
+      - name: Clone exact Watermelon 4.14.355 baseline
+        run: |
+          set -euxo pipefail
+          git init kernel
+          cd kernel
+          git remote add origin "$KERNEL_REPO"
+          git fetch --depth=1 origin "$KERNEL_COMMIT"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -q '^VERSION = 4$' Makefile
+          grep -q '^PATCHLEVEL = 14$' Makefile
+          grep -q '^SUBLEVEL = 355$' Makefile
+          test -f arch/arm64/configs/surya_defconfig
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/watermelon-base.txt"
+
+      - name: Apply targeted Wi-Fi power-cycle fix
+        run: |
+          set -euxo pipefail
+          cd kernel
+          git fetch --depth=1 origin "$WIFI_FIX_COMMIT"
+          git -c user.name=riwutz -c user.email=actions@localhost cherry-pick "$WIFI_FIX_COMMIT"
+          git show --stat --oneline HEAD | tee "$GITHUB_WORKSPACE/wifi-fix.txt"
+          grep -R -n 'umac_stop_complete_cb' drivers/staging/qcacld-3.0 | head -n 10
+          grep -R -n 'qdf_event_set(stop_evt)' drivers/staging/qcacld-3.0 | head -n 10
+
+      - name: Prepare ClangBuiltLinux 20 toolchain
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 -b 20 https://bitbucket.org/rdxzv/clang-standalone.git clang
+          test -x clang/bin/clang
+          clang/bin/clang --version | head -n 3 | tee compiler.txt
+          clang/bin/clang --version | grep -E 'clang version 20|20\.1\.0'
+
+      - name: Integrate KernelSU Next v1.1.1 driver 12851
+        run: |
+          set -euxo pipefail
+          cd kernel
+          git clone "$KSU_REPO" KernelSU-Next
+          git -C KernelSU-Next checkout --detach "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next rev-parse HEAD)" = "$KSU_COMMIT"
+          test "$(git -C KernelSU-Next describe --tags --exact-match)" = "$KSU_TAG"
+
+          KSU_COUNT="$(git -C KernelSU-Next rev-list --count HEAD)"
+          KSU_VERSION="$((10000 + KSU_COUNT + 200))"
+          echo "KSU_COUNT=$KSU_COUNT"
+          echo "KSU_VERSION=$KSU_VERSION" | tee "$GITHUB_WORKSPACE/ksunext-version.txt"
+          test "$KSU_VERSION" = "$KSU_VERSION_EXPECTED"
+
+          rm -rf drivers/kernelsu
+          ln -s ../KernelSU-Next/kernel drivers/kernelsu
+          grep -qF 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          grep -qF 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          # Watermelon already contains legacy manual KSU hooks. v1.1.1 renamed
+          # the ksud exec hook, so update only that symbol and keep donor hooks.
+          sed -i 's/ksu_handle_execveat(/ksu_handle_execveat_ksud(/g' fs/exec.c
+          grep -q 'ksu_handle_execveat_ksud' fs/exec.c
+          grep -q 'ksu_handle_execveat_sucompat' fs/exec.c
+          grep -q 'ksu_handle_faccessat' fs/open.c
+          grep -q 'ksu_handle_sys_read' fs/read_write.c
+          grep -q 'ksu_handle_stat' fs/stat.c
+          grep -q 'ksu_handle_input_handle_event' drivers/input/input.c
+          grep -q 'ksu_handle_devpts' drivers/tty/pty.c
+
+      - name: Configure riwutz_josjiz
+        run: |
+          set -euxo pipefail
+          cd kernel
+          cp arch/arm64/configs/surya_defconfig arch/arm64/configs/riwutz_josjiz_defconfig
+
+          # Keep Linux 4.14.355 but expose exactly one custom kernel name.
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          ./scripts/config --file arch/arm64/configs/riwutz_josjiz_defconfig \
+            --set-str LOCALVERSION '-riwutz_josjiz' \
+            -d LOCALVERSION_AUTO \
+            -e OVERLAY_FS \
+            -e KSU \
+            -d KSU_KPROBES_HOOK \
+            -d KSU_LSM_SECURITY_HOOKS
+
+          grep -q 'CONFIG_LOCALVERSION="-riwutz_josjiz"' arch/arm64/configs/riwutz_josjiz_defconfig
+          grep -q 'CONFIG_KSU=y' arch/arm64/configs/riwutz_josjiz_defconfig
+          grep -q '# CONFIG_KSU_KPROBES_HOOK is not set' arch/arm64/configs/riwutz_josjiz_defconfig
+
+      - name: Build Watermelon 4.14.355 Image.gz DTB DTBO
+        env:
+          KBUILD_BUILD_USER: riwutz
+          KBUILD_BUILD_HOST: josjiz
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
+          make O=out ARCH=arm64 riwutz_josjiz_defconfig
+          make -j"$(nproc)" O=out ARCH=arm64 LLVM=1 Image.gz dtb.img dtbo.img 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+          test -s out/arch/arm64/boot/Image.gz
+          test -s out/arch/arm64/boot/dtb.img
+          test -s out/arch/arm64/boot/dtbo.img
+          grep -q -- 'KernelSU-Next version: 12851' "$GITHUB_WORKSPACE/build.log"
+
+          gzip -dc out/arch/arm64/boot/Image.gz > "$GITHUB_WORKSPACE/Image.raw"
+          strings "$GITHUB_WORKSPACE/Image.raw" | grep -m1 'Linux version 4.14.355-riwutz_josjiz' | tee "$GITHUB_WORKSPACE/kernel-version.txt"
+          sha256sum out/arch/arm64/boot/Image.gz out/arch/arm64/boot/dtb.img out/arch/arm64/boot/dtbo.img | tee "$GITHUB_WORKSPACE/payload-sha256.txt"
+
+      - name: Package A10 A11 A12 autodetect ZIP
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 -b watermelon https://github.com/xradens/AnyKernel3.git ak3
+          rm -rf ak3/.git
+          mkdir -p ak3/payload/a10 ak3/payload/a11-a12
+
+          for p in a10 a11-a12; do
+            cp kernel/out/arch/arm64/boot/Image.gz "ak3/payload/$p/Image.gz"
+            cp kernel/out/arch/arm64/boot/dtb.img "ak3/payload/$p/dtb.img"
+            cp kernel/out/arch/arm64/boot/dtbo.img "ak3/payload/$p/dtbo.img"
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('ak3/anykernel.sh')
+          s = p.read_text()
+          s = s.replace('kernel.string=OSS Kernel | POCO X3/NFC', 'kernel.string=riwutz_josjiz')
+          import re
+          s = re.sub(r'supported\.versions=[^\n]*', 'supported.versions=10-12', s)
+          anchor = '. tools/ak3-core.sh;\n\n# boot install\n'
+          insert = r'''. tools/ak3-core.sh;
+
+# Android-version autodetect. Separate payload paths are kept so A10 can
+# diverge safely from A11/A12 if device testing requires a vendor-specific DTB.
+ANDROID_VER="$(getprop ro.build.version.release 2>/dev/null | cut -d. -f1)"
+case "$ANDROID_VER" in
+  10) PAYLOAD="$home/payload/a10" ;;
+  11|12) PAYLOAD="$home/payload/a11-a12" ;;
+  *) abort "riwutz_josjiz: Android $ANDROID_VER is not supported" ;;
+esac
+ui_print "- riwutz_josjiz / Android $ANDROID_VER"
+cp -f "$PAYLOAD/Image.gz" "$home/Image.gz"
+cp -f "$PAYLOAD/dtb.img" "$home/dtb.img"
+cp -f "$PAYLOAD/dtbo.img" "$home/dtbo.img"
+
+# boot install
+'''
+          if anchor not in s:
+              raise SystemExit('AnyKernel insertion anchor not found')
+          p.write_text(s.replace(anchor, insert, 1))
+          PY
+
+          grep -q 'supported.versions=10-12' ak3/anykernel.sh
+          grep -q 'payload/a10' ak3/anykernel.sh
+          grep -q 'payload/a11-a12' ak3/anykernel.sh
+          rm -f ak3/Image.gz ak3/dtb.img ak3/dtbo.img
+          (cd ak3 && zip -r9 "../$ZIP_NAME" . -x '*.git*' 'README.md')
+          unzip -t "$ZIP_NAME"
+          sha256sum "$ZIP_NAME" | tee zip-sha256.txt
+
+      - name: Upload riwutz_josjiz build
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz
+          path: |
+            riwutz_josjiz.zip
+            build.log
+            kernel-version.txt
+            ksunext-version.txt
+            wifi-fix.txt
+            compiler.txt
+            payload-sha256.txt
+            zip-sha256.txt
+          if-no-files-found: error
