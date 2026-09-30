@@ -58,17 +58,39 @@ jobs:
         run: |
           set -euxo pipefail
           cd kernel
-          git fetch --depth=1 origin "$WIFI_FIX"
-          git cherry-pick --no-commit FETCH_HEAD
-          test ! -e .git/CHERRY_PICK_HEAD || git reset
           python3 - <<'PY'
           from pathlib import Path
           p = Path('drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c')
           s = p.read_text()
-          if '#ifdef QDF_ENABLE_TRACING\nstatic void umac_stop_complete_cb' in s:
-              raise SystemExit('Wi-Fi fix was not applied: conditional callback remains')
-          if 'qdf_event_set(stop_evt)' not in s:
-              raise SystemExit('Wi-Fi fix missing qdf_event_set(stop_evt)')
+          old = '''#ifdef QDF_ENABLE_TRACING
+          static void umac_stop_complete_cb(void *user_data)
+          {
+          \tqdf_event_t *stop_evt = (qdf_event_t *) user_data;
+          \tQDF_STATUS qdf_status = qdf_event_set(stop_evt);
+
+          \tQDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+          }
+          #else
+          static void umac_stop_complete_cb(void *user_data)
+          {
+          \treturn;
+          }
+          #endif'''
+          new = '''static void umac_stop_complete_cb(void *user_data)
+          {
+          \tqdf_event_t *stop_evt = (qdf_event_t *) user_data;
+          \tQDF_STATUS qdf_status = qdf_event_set(stop_evt);
+
+          \tQDF_ASSERT(QDF_IS_STATUS_SUCCESS(qdf_status));
+          }'''
+          if old not in s:
+              raise SystemExit('Wi-Fi patch anchor not found; refusing broad patch')
+          p.write_text(s.replace(old, new, 1))
+          s2 = p.read_text()
+          if '#ifdef QDF_ENABLE_TRACING\nstatic void umac_stop_complete_cb' in s2:
+              raise SystemExit('Wi-Fi fix was not applied')
+          if 'QDF_STATUS qdf_status = qdf_event_set(stop_evt);' not in s2:
+              raise SystemExit('Wi-Fi completion event missing')
           print('WIFI_FIX=PASS')
           PY
           git diff -- drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c | tee "$GITHUB_WORKSPACE/wifi-fix.patch.txt"
@@ -91,9 +113,7 @@ jobs:
           rm -rf drivers/kernelsu
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           grep -q 'obj-$(CONFIG_KSU).*kernelsu/' drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
-          if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
-            sed -i '/endmenu/i\source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
+          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig || printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
           git -C KernelSU-Next rev-parse HEAD | tee "$GITHUB_WORKSPACE/ksunext-source.txt"
 
       - name: Integrate SUSFS v1.5.4 for Linux 4.14
