@@ -157,34 +157,43 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('ak3/anykernel.sh')
-          s = p.read_text()
-          s = s.replace('kernel.string=OSS Kernel | POCO X3/NFC', 'kernel.string=riwutz_josjiz')
           import re
-          s = re.sub(r'supported\.versions=[^\n]*', 'supported.versions=10-12', s)
-          anchor = '. tools/ak3-core.sh;\n\n# boot install\n'
-          insert = r'''. tools/ak3-core.sh;
 
-# Android-version autodetect. Separate payload paths are kept so A10 can
-# diverge safely from A11/A12 if device testing requires a vendor-specific DTB.
-ANDROID_VER="$(getprop ro.build.version.release 2>/dev/null | cut -d. -f1)"
-case "$ANDROID_VER" in
-  10) PAYLOAD="$home/payload/a10" ;;
-  11|12) PAYLOAD="$home/payload/a11-a12" ;;
-  *) abort "riwutz_josjiz: Android $ANDROID_VER is not supported" ;;
-esac
-ui_print "- riwutz_josjiz / Android $ANDROID_VER"
-cp -f "$PAYLOAD/Image.gz" "$home/Image.gz"
-cp -f "$PAYLOAD/dtb.img" "$home/dtb.img"
-cp -f "$PAYLOAD/dtbo.img" "$home/dtbo.img"
+          p = Path("ak3/anykernel.sh")
+          s = p.read_text()
+          s = s.replace(
+              "kernel.string=OSS Kernel | POCO X3/NFC",
+              "kernel.string=riwutz_josjiz",
+          )
+          s = re.sub(r"supported\.versions=[^\n]*", "supported.versions=10-12", s)
+          anchor = ". tools/ak3-core.sh;\n\n# boot install\n"
+          insert = """. tools/ak3-core.sh;
 
-# boot install
-'''
+          # Android-version autodetect. A10 and A11/A12 are separate payload
+          # slots so the A10 DTB/DTBO can diverge later without changing ZIP logic.
+          ANDROID_VER="$(getprop ro.build.version.release 2>/dev/null | cut -d. -f1)"
+          case "$ANDROID_VER" in
+            10) PAYLOAD="$home/payload/a10" ;;
+            11|12) PAYLOAD="$home/payload/a11-a12" ;;
+            *) abort "riwutz_josjiz: Android $ANDROID_VER is not supported" ;;
+          esac
+          ui_print "- riwutz_josjiz / Android $ANDROID_VER"
+          cp -f "$PAYLOAD/Image.gz" "$home/Image.gz"
+          cp -f "$PAYLOAD/dtb.img" "$home/dtb.img"
+          cp -f "$PAYLOAD/dtbo.img" "$home/dtbo.img"
+
+          # boot install
+          """
+          insert = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in insert.splitlines()
+          ) + "\n"
           if anchor not in s:
-              raise SystemExit('AnyKernel insertion anchor not found')
+              raise SystemExit("AnyKernel insertion anchor not found")
           p.write_text(s.replace(anchor, insert, 1))
           PY
 
+          grep -q 'kernel.string=riwutz_josjiz' ak3/anykernel.sh
           grep -q 'supported.versions=10-12' ak3/anykernel.sh
           grep -q 'payload/a10' ak3/anykernel.sh
           grep -q 'payload/a11-a12' ak3/anykernel.sh
