@@ -25,7 +25,7 @@ jobs:
       SUSFS_REPO: https://github.com/kutemeikito/susfs4ksu.git
       SUSFS_COMMIT: 96750ec8cb280c22534875ebaaad360cefdec77b
       CLANG_REPO: https://bitbucket.org/rdxzv/clang-standalone.git
-      CLANG_BRANCH: '20'
+      CLANG_BRANCH: '19'
       ZIP_NAME: riwutz_josjiz.zip
       TAG_NAME: riwutz_josjiz-watermelon-414355
 
@@ -95,12 +95,12 @@ jobs:
           PY
           git diff -- drivers/staging/qcacld-3.0/core/mac/src/sys/common/src/wlan_qct_sys.c | tee "$GITHUB_WORKSPACE/wifi-fix.patch.txt"
 
-      - name: Prepare Watermelon Clang 20
+      - name: Prepare Watermelon Clang 19
         run: |
           set -euxo pipefail
-          git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" clang-20
-          test -x clang-20/bin/clang
-          clang-20/bin/clang --version | head -n4 | tee compiler.txt
+          git clone --depth=1 -b "$CLANG_BRANCH" "$CLANG_REPO" clang-19
+          test -x clang-19/bin/clang
+          clang-19/bin/clang --version | head -n4 | tee compiler.txt
 
       - name: Integrate KernelSU Next v1.1.1 exactly
         run: |
@@ -147,7 +147,7 @@ jobs:
         run: |
           set -euxo pipefail
           cd kernel
-          export PATH="$GITHUB_WORKSPACE/clang-20/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang-19/bin:$PATH"
           make O=out ARCH=arm64 LLVM=1 surya_defconfig
           scripts/config --file out/.config --set-str LOCALVERSION '-riwutz_josjiz'
           scripts/config --file out/.config -d LOCALVERSION_AUTO
@@ -170,7 +170,7 @@ jobs:
         run: |
           set -o pipefail
           cd kernel
-          export PATH="$GITHUB_WORKSPACE/clang-20/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang-19/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export KBUILD_BUILD_USER=riwutz
