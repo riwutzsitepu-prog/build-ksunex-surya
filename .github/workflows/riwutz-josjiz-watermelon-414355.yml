@@ -30,14 +30,12 @@ jobs:
       TAG_NAME: riwutz_josjiz-watermelon-414355
 
     steps:
-      - name: Install build dependencies
+      - name: Verify runner build tools
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates cpio curl file flex git \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi libelf-dev libssl-dev \
-            make patch python3 python-is-python3 rsync unzip xz-utils zip zstd
+          for t in git make python3 perl bc bison flex patch zip unzip; do command -v "$t"; done
+          test -f /usr/include/openssl/ssl.h
+          test -f /usr/include/libelf.h
 
       - name: Checkout exact Watermelon 4.14.355 source
         run: |
@@ -175,10 +173,7 @@ jobs:
           export SUBARCH=arm64
           export KBUILD_BUILD_USER=riwutz
           export KBUILD_BUILD_HOST=josjiz
-          make O=out -j"$(nproc)" ARCH=arm64 LLVM=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            Image.gz dtb.img dtbo.img 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          make O=out -j"$(nproc)" ARCH=arm64 LLVM=1 Image.gz dtb.img dtbo.img 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
       - name: Validate kernel identity and features
         run: |
