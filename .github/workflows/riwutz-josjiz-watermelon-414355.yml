@@ -63,7 +63,7 @@ jobs:
           curl -L --fail --retry 5 --retry-delay 3 -o /tmp/greenforce-clang-20.tar.zst "$CLANG_URL"
           echo "$CLANG_SHA256  /tmp/greenforce-clang-20.tar.zst" | sha256sum -c -
           tar --zstd -xf /tmp/greenforce-clang-20.tar.zst -C tc/extract
-          CLANG_BIN="$(find tc/extract -type f -path '*/bin/clang' -print -quit)"
+          CLANG_BIN="$(find tc/extract -path '*/bin/clang' -print -quit)"
           test -n "$CLANG_BIN"
           CLANG_ROOT="$(dirname "$(dirname "$CLANG_BIN")")"
           cp -a "$CLANG_ROOT"/. tc/clang-20/
