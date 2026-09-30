@@ -96,7 +96,6 @@ jobs:
           from pathlib import Path
           import re
 
-          # Adapt only the known SUSFS hunks that do not apply cleanly to KSU Next v1.1.1.
           p = Path('ksu-next/kernel/core_hook.c')
           s = p.read_text()
 
@@ -156,7 +155,6 @@ jobs:
           elif 'if (!ksu_is_zygote(old->security))' not in s and 'if (!is_zygote_child)' not in s:
               raise SystemExit('core_hook: zygote check anchor missing')
 
-          # Hunk #12 already renames the helper; update v1.1.1 call sites without touching prefixed names.
           s = re.sub(r'(?<![A-Za-z0-9_])try_umount\(', 'ksu_try_umount(', s)
 
           start = '\t// fixme: use `collect_mounts` and `iterate_mount` to iterate all mountpoint and\n'
@@ -198,7 +196,6 @@ jobs:
           if 'susfs_set_zygote_sid();' not in s:
               anchor = '\tmutex_unlock(&ksu_rules);\n'
               block = '''#ifdef CONFIG_KSU_SUSFS
-          \t// Allow SUSFS umount handling in zygote on KSU Next v1.1.1.
           \tksu_allow(db, "zygote", "labeledfs", "filesystem", "unmount");
           \tsusfs_set_init_sid();
           \tsusfs_set_ksu_sid();
@@ -223,7 +220,6 @@ jobs:
                   raise SystemExit(f'selinux rules compatibility token missing: {token}')
           p.write_text(s)
 
-          # Pin exactly the requested v1.1.1 kernel-side version.
           p = Path('ksu-next/kernel/Makefile')
           s = p.read_text()
           start = s.find('# .git is a text file')
@@ -238,6 +234,21 @@ jobs:
 
           find ksu-next/kernel -name '*.rej' -delete
           find ksu-next/kernel -name '*.orig' -delete
+
+          python3 - <<'PY'
+          from pathlib import Path
+          for rel in (
+              'ksu-next/kernel/Kconfig',
+              'ksu-next/kernel/selinux/selinux.c',
+              'ksu-next/kernel/sucompat.c',
+          ):
+              p = Path(rel)
+              lines = [line.rstrip() for line in p.read_text().splitlines()]
+              while lines and not lines[-1]:
+                  lines.pop()
+              p.write_text('\n'.join(lines) + '\n')
+          PY
+
           grep -q '^KSU_VERSION := 12851$' ksu-next/kernel/Makefile
           grep -q 'bool susfs_is_allow_su(void)' ksu-next/kernel/core_hook.c
           grep -q 'susfs_try_umount_all(new_uid.val)' ksu-next/kernel/core_hook.c
