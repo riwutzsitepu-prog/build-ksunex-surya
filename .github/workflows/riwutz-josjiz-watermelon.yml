@@ -24,6 +24,8 @@ jobs:
       KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
       KSU_TAG: v1.1.1
       KSU_VERSION_EXPECTED: '12851'
+      CLANG_URL: https://github.com/greenforce-project/greenforce_clang/releases/download/26012025/greenforce-clang-20.0.0git-26012025.tar.xz
+      CLANG_SHA256: 6350e8a4d8f50e43ebc37b8714ca7381175b8c1b56db6a94b74d8109956a2c0c
       ZIP_NAME: riwutz_josjiz.zip
 
     steps:
@@ -74,10 +76,14 @@ jobs:
       - name: Prepare ClangBuiltLinux 20 toolchain
         run: |
           set -euxo pipefail
-          git clone --depth=1 -b 20 https://bitbucket.org/rdxzv/clang-standalone.git clang
+          curl -fL --retry 5 --retry-delay 3 "$CLANG_URL" -o clang.tar.xz
+          echo "$CLANG_SHA256  clang.tar.xz" | sha256sum -c -
+          mkdir -p clang
+          tar -xJf clang.tar.xz -C clang --strip-components=1
           test -x clang/bin/clang
+          test -x clang/bin/ld.lld
           clang/bin/clang --version | head -n 3 | tee compiler.txt
-          clang/bin/clang --version | grep -E 'clang version 20|20\.1\.0'
+          clang/bin/clang --version | grep -E 'clang version 20|20\.0\.0'
 
       - name: Integrate KernelSU Next v1.1.1 driver 12851
         run: |
