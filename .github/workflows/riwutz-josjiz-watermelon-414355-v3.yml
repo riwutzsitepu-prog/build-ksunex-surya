@@ -6,6 +6,7 @@ on:
       - 'project/riwutz_josjiz-watermelon-414355'
     paths:
       - '.github/workflows/riwutz-josjiz-watermelon-414355-v3.yml'
+      - '.github/scripts/riwutz_josjiz_port_susfs_414.py'
   workflow_dispatch:
 
 permissions:
@@ -28,6 +29,11 @@ jobs:
       TAG_NAME: riwutz_josjiz-watermelon-414355
 
     steps:
+      - name: Checkout project helpers
+        uses: actions/checkout@v4
+        with:
+          ref: project/riwutz_josjiz-watermelon-414355
+
       - name: Prepare minimal build dependencies and NDK LLVM
         run: |
           set -euxo pipefail
@@ -43,6 +49,7 @@ jobs:
       - name: Checkout exact Watermelon 4.14.355
         run: |
           set -euxo pipefail
+          rm -rf kernel
           git init kernel
           cd kernel
           git remote add origin "$KERNEL_REPO"
@@ -53,6 +60,7 @@ jobs:
           grep -q '^PATCHLEVEL = 14$' Makefile
           grep -q '^SUBLEVEL = 355$' Makefile
           sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
+          git rev-parse HEAD | tee "$GITHUB_WORKSPACE/watermelon-source.txt"
 
       - name: Apply exact Wi-Fi OFF-ON completion fix
         run: |
@@ -104,10 +112,12 @@ jobs:
           ln -s ../KernelSU-Next/kernel drivers/kernelsu
           grep -Fq 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
           grep -Fq 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
+          git -C KernelSU-Next rev-parse HEAD | tee "$GITHUB_WORKSPACE/ksunext-source.txt"
 
-      - name: Integrate SUSFS v1.5.4
+      - name: Integrate SUSFS v1.5.4 with Watermelon port
         run: |
           set -euxo pipefail
+          rm -rf susfs4ksu
           git init susfs4ksu
           cd susfs4ksu
           git remote add origin "$SUSFS_REPO"
@@ -117,18 +127,37 @@ jobs:
           cd "$GITHUB_WORKSPACE/kernel"
           cp -f ../susfs4ksu/kernel_patches/fs/* fs/
           cp -f ../susfs4ksu/kernel_patches/include/linux/* include/linux/
-          patch -p1 --forward < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch
+
+          set +e
+          patch -p1 --forward < ../susfs4ksu/kernel_patches/50_add_susfs_in_kernel-4.14.patch 2>&1 | tee "$GITHUB_WORKSPACE/susfs-kernel-patch.log"
+          kernel_patch_rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$kernel_patch_rc" -ne 0 ]; then
+            find . -name '*.rej' -not -path './KernelSU-Next/*' -print -exec sh -c 'echo === $1; cat "$1"' _ {} \; | tee "$GITHUB_WORKSPACE/susfs-kernel-rejects-before-port.txt"
+            python3 "$GITHUB_WORKSPACE/.github/scripts/riwutz_josjiz_port_susfs_414.py" "$GITHUB_WORKSPACE/kernel"
+          fi
+          if find . -name '*.rej' -not -path './KernelSU-Next/*' -print -quit | grep -q .; then
+            echo 'Unresolved kernel SUSFS rejects remain'
+            find . -name '*.rej' -not -path './KernelSU-Next/*' -print
+            exit 1
+          fi
+
           cd KernelSU-Next
           set +e
           patch -p1 --forward < ../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch 2>&1 | tee "$GITHUB_WORKSPACE/susfs-ksu-patch.log"
-          rc=${PIPESTATUS[0]}
+          ksu_patch_rc=${PIPESTATUS[0]}
           set -e
-          if [ "$rc" -ne 0 ]; then
-            find . -name '*.rej' -print -exec sh -c 'echo === $1; cat "$1"' _ {} \; | tee "$GITHUB_WORKSPACE/susfs-rejects.txt"
-            exit "$rc"
+          if [ "$ksu_patch_rc" -ne 0 ]; then
+            find . -name '*.rej' -print -exec sh -c 'echo === $1; cat "$1"' _ {} \; | tee "$GITHUB_WORKSPACE/susfs-ksu-rejects.txt"
+            exit "$ksu_patch_rc"
           fi
+
           cd "$GITHUB_WORKSPACE/kernel"
           grep -q 'SUSFS_VERSION.*1.5.4' include/linux/susfs.h
+          grep -q 'susfs_spoof_uname(&tmp);' kernel/sys.c
+          grep -q 'CONFIG_KSU_SUSFS_SUS_KSTAT' fs/proc/task_mmu.c
+          grep -q 'INODE_STATE_SUS_PATH' fs/dcache.c
+          echo 'SUSFS_WATERMELON_PORT=PASS' | tee "$GITHUB_WORKSPACE/susfs-port-status.txt"
 
       - name: Configure exact kernel name
         run: |
@@ -184,6 +213,7 @@ jobs:
       - name: Package one ZIP with A10 and A11-A12 autodetect
         run: |
           set -euxo pipefail
+          rm -rf ak3
           git clone --depth=1 -b oss https://github.com/xradens/AnyKernel3.git ak3
           rm -rf ak3/.git ak3/.github
           rm -f ak3/Image ak3/Image.gz ak3/Image.gz-dtb ak3/dtb ak3/dtb.img ak3/dtbo.img
@@ -224,6 +254,7 @@ jobs:
               ;;
             11|12)
               ui_print "riwutz_josjiz: Android $android_ver";
+              ui_print 'Using Watermelon DTB + DTBO';
               cp variants/a11_12/Image.gz Image.gz;
               cp variants/a11_12/dtb.img dtb.img;
               cp variants/a11_12/dtbo.img dtbo.img;
@@ -231,6 +262,7 @@ jobs:
             *) abort "Unsupported Android $android_ver. Supported: 10, 11, 12.";;
           esac
           ui_print '4.14.355 | KernelSU Next 1.1.1/12851 | SUSFS 1.5.4';
+          ui_print 'Wi-Fi OFF/ON completion fix enabled';
           dump_boot;
           write_boot;
           AK3
@@ -262,10 +294,16 @@ jobs:
             kernel-version.txt
             ksu-version.txt
             payload-sha256.txt
+            watermelon-source.txt
+            ksunext-source.txt
             wifi-fix.patch.txt
+            susfs-kernel-patch.log
+            susfs-kernel-rejects-before-port.txt
             susfs-ksu-patch.log
-            susfs-rejects.txt
+            susfs-ksu-rejects.txt
+            susfs-port-status.txt
             riwutz_josjiz.config
+            kernel/KernelSU-Next/**/*.rej
 
       - name: Upload flashable ZIP
         if: success()
@@ -285,8 +323,11 @@ jobs:
           prerelease: true
           body: |
             Poco X3 NFC surya/karna kernel.
-            Watermelon 4.14.355, KernelSU Next v1.1.1/12851, SUSFS v1.5.4.
-            A10 + A11/A12 autodetect. Includes targeted qcacld Wi-Fi OFF/ON completion fix.
+            Watermelon Linux 4.14.355.
+            KernelSU Next v1.1.1 / 12851 + SUSFS v1.5.4.
+            One ZIP autodetects Android 10 versus Android 11/12.
+            Android 10 preserves ROM DTBO; Android 11/12 uses Watermelon DTB + DTBO.
+            Includes the targeted qcacld Wi-Fi OFF/ON completion fix.
           files: |
             riwutz_josjiz.zip
             riwutz_josjiz.zip.sha256
