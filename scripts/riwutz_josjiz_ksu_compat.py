@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import sys
 
-root = Path('ksu-next/kernel')
+root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('ksu-next/kernel')
 
 p = root / 'core_hook.c'
 s = p.read_text()
