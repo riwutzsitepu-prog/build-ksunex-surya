@@ -69,7 +69,15 @@ jobs:
           rm -rf out6
           make O=out6 LLVM=1 surya_defconfig
 
+          set +e
           base64 -d "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.config.gz.b64" | gzip -dc > ../wih-riwut-a10-delta.config
+          gzip_rc=$?
+          set -e
+          test -s ../wih-riwut-a10-delta.config
+          echo '1692159dfb98bb4889e5bd9e2ffb07ee604936eeb30f37420e4cda4286d25105  ../wih-riwut-a10-delta.config' | sha256sum -c -
+          if [ "$gzip_rc" -ne 0 ]; then
+            echo 'gzip footer CRC mismatch ignored: extracted A10 delta SHA256 is exact'
+          fi
 
           python3 - <<'PY'
           from pathlib import Path
