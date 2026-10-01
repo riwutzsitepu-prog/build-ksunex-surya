@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import sys
+
+base = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('kernel')
 
 # fs/dcache.c: only the __d_lookup_rcu SUS_PATH hunk differs on Watermelon.
-p = Path('kernel/fs/dcache.c')
+p = base / 'fs/dcache.c'
 s = p.read_text()
 needle = '''\t\tif (dentry_cmp(dentry, str, hashlen_len(hashlen)) != 0)\n\t\t\tcontinue;\n\t\t*seqp = seq;\n'''
 insert = '''\t\tif (dentry_cmp(dentry, str, hashlen_len(hashlen)) != 0)\n\t\t\tcontinue;\n#ifdef CONFIG_KSU_SUSFS_SUS_PATH\n\t\tif (dentry->d_inode && unlikely(dentry->d_inode->i_state & INODE_STATE_SUS_PATH) && likely(current->susfs_task_state & TASK_STRUCT_NON_ROOT_USER_APP_PROC)) {\n\t\t\tcontinue;\n\t\t}\n#endif\n\t\t*seqp = seq;\n'''
@@ -13,7 +16,7 @@ if 'dentry->d_inode->i_state & INODE_STATE_SUS_PATH' not in s.split('struct dent
 p.write_text(s)
 
 # fs/proc/cmdline.c: Watermelon has a simple /proc/cmdline implementation.
-p = Path('kernel/fs/proc/cmdline.c')
+p = base / 'fs/proc/cmdline.c'
 s = p.read_text()
 if 'extern int susfs_spoof_cmdline_or_bootconfig' not in s:
     anchor = '#include <linux/seq_file.h>\n\n'
@@ -30,7 +33,7 @@ if 'susfs_spoof_cmdline_or_bootconfig(m)' not in s:
 p.write_text(s)
 
 # fs/proc/task_mmu.c: helper/body hunks apply; Watermelon only needs the include.
-p = Path('kernel/fs/proc/task_mmu.c')
+p = base / 'fs/proc/task_mmu.c'
 s = p.read_text()
 if '#include <linux/susfs_def.h>' not in s:
     anchor = '#include <linux/ctype.h>\n'
@@ -41,7 +44,7 @@ if '#include <linux/susfs_def.h>' not in s:
 p.write_text(s)
 
 # kernel/sys.c: preserve Watermelon bpfloader/netd fake-uname logic and run SUSFS first.
-p = Path('kernel/kernel/sys.c')
+p = base / 'kernel/sys.c'
 s = p.read_text()
 if 'extern void susfs_spoof_uname' not in s:
     anchor = 'SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)\n'
@@ -59,20 +62,20 @@ p.write_text(s)
 
 # Strong semantic checks for all four adaptations.
 checks = {
-    'kernel/fs/dcache.c': [
+    base / 'fs/dcache.c': [
         '#include <linux/susfs_def.h>',
         'TASK_STRUCT_NON_ROOT_USER_APP_PROC',
     ],
-    'kernel/fs/proc/cmdline.c': [
+    base / 'fs/proc/cmdline.c': [
         'extern int susfs_spoof_cmdline_or_bootconfig',
         'susfs_spoof_cmdline_or_bootconfig(m)',
     ],
-    'kernel/fs/proc/task_mmu.c': [
+    base / 'fs/proc/task_mmu.c': [
         '#include <linux/susfs_def.h>',
         'susfs_sus_ino_for_show_map_vma',
         'INODE_STATE_SUS_KSTAT',
     ],
-    'kernel/kernel/sys.c': [
+    base / 'kernel/sys.c': [
         'extern void susfs_spoof_uname',
         'susfs_spoof_uname(&tmp);',
         'bpfloader',
@@ -80,7 +83,7 @@ checks = {
     ],
 }
 for fn, tokens in checks.items():
-    text = Path(fn).read_text()
+    text = fn.read_text()
     for token in tokens:
         if token not in text:
             raise SystemExit(f'{fn}: validation token missing: {token}')
