@@ -5,6 +5,30 @@ import sys
 
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('ksu-next/kernel')
 
+# SUSFS v1.5.4 renames the manager APK helper. Keep the full KSU Next v1.1.1
+# verification/retry body; only align the symbol name expected by patched callers.
+p = root / 'apk_sign.c'
+s = p.read_text()
+if 'bool ksu_is_manager_apk(char *path)' not in s:
+    old = 'bool is_manager_apk(char *path)'
+    if old not in s:
+        raise SystemExit('apk_sign: manager function anchor missing')
+    s = s.replace(old, 'bool ksu_is_manager_apk(char *path)', 1)
+for token in ('expected_manager_size', 'expected_manager_hash', 'while (tries++ < 10)'):
+    if token not in s:
+        raise SystemExit(f'apk_sign: KSU Next v1.1.1 verification token missing: {token}')
+p.write_text(s)
+
+p = root / 'apk_sign.h'
+s = p.read_text()
+s = s.replace('bool is_manager_apk(char *path);', 'bool ksu_is_manager_apk(char *path);')
+p.write_text(s)
+
+p = root / 'throne_tracker.c'
+s = p.read_text()
+s = re.sub(r'(?<![A-Za-z0-9_])is_manager_apk\(', 'ksu_is_manager_apk(', s)
+p.write_text(s)
+
 p = root / 'core_hook.c'
 s = p.read_text()
 
