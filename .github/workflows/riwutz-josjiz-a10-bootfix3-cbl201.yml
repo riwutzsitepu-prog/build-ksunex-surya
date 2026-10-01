@@ -51,10 +51,13 @@ jobs:
           good = "static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n"
           if bad not in s:
               raise SystemExit('mq-deadline duplicate dd anchor not found')
-          p.write_text(s.replace(bad, good, 1))
+          s = s.replace(bad, good, 1)
+          if bad in s:
+              raise SystemExit('mq-deadline duplicate dd still present in __dd_dispatch_request')
+          p.write_text(s)
           PY
           grep -n 'boosted_task_util(struct task_struct \*task);' kernel/sched/fair.c
-          ! grep -q 'struct deadline_data \*dd = hctx->queue->elevator->elevator_data;' block/mq-deadline.c
+          grep -n '^static struct request \*__dd_dispatch_request(struct deadline_data \*dd)' block/mq-deadline.c
 
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
         run: |
