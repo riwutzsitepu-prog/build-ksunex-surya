@@ -76,7 +76,8 @@ jobs:
 
           cat \
             "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part00" \
-            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01a" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01b" \
             "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part02" \
             "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part03" \
             > ../wih-riwut-a10-delta.config
