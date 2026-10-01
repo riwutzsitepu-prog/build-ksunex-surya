@@ -39,7 +39,7 @@ jobs:
           set -o pipefail
           git config user.name riwutz
           git config user.email riwutz@cahazzu.local
-          git fetch --depth=2 origin 055b48f3fb1c6d0651bf4e84fdd296cddd051299
+          git fetch --depth=3 origin 055b48f3fb1c6d0651bf4e84fdd296cddd051299
 
           set +e
           git cherry-pick 7acba8aadf95dea99ac20523799dbe4373a81391 > ../cherry-pick-scheduler.log 2>&1
