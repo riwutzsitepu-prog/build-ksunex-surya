@@ -1,4 +1,4 @@
-name: riwutz_josjiz A10 BOOTFIX5 KSU ISOLATION
+name: riwutz_josjiz A10 BOOTFIX6 REFCONFIG 4.14.355
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - riwutz-a10-bootfix2
     paths:
       - '.github/workflows/riwutz-josjiz-a10-bootfix3-cbl201.yml'
+      - '.github/configs/wih-riwut-a10-delta.config.gz.b64'
   workflow_dispatch:
 
 jobs:
@@ -62,99 +63,118 @@ jobs:
           tc/llvm-20.1.0/bin/clang --version | grep -q 'clang version 20.1.0'
           echo "$GITHUB_WORKSPACE/tc/llvm-20.1.0/bin" >> "$GITHUB_PATH"
 
-      - name: Configure BOOTFIX5A donor-like scheduler KSU OFF
+      - name: Configure 4.14.355 from known-good A10 config delta
         working-directory: kernel
         run: |
-          rm -rf out5a
-          make O=out5a LLVM=1 surya_defconfig
-          scripts/config --file out5a/.config --disable KSU
-          scripts/config --file out5a/.config --disable UCLAMP_TASK
-          scripts/config --file out5a/.config --disable UCLAMP_TASK_GROUP
-          scripts/config --file out5a/.config --disable UCLAMP_BUCKETS_COUNT
-          scripts/config --file out5a/.config --enable SCHED_TUNE
-          scripts/config --file out5a/.config --enable FAIR_GROUP_SCHED
-          scripts/config --file out5a/.config --set-str LOCALVERSION "-riwutz_josjiz"
-          scripts/config --file out5a/.config --disable LOCALVERSION_AUTO
-          make O=out5a LLVM=1 olddefconfig
-          grep -q '^# CONFIG_KSU is not set$' out5a/.config
-          grep -q '^CONFIG_SCHED_TUNE=y$' out5a/.config
-          grep -q '^CONFIG_FAIR_GROUP_SCHED=y$' out5a/.config
-          ! grep -q '^CONFIG_UCLAMP_TASK=y$' out5a/.config
-          ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' out5a/.config
-          cp out5a/.config ../bootfix5A.config
+          rm -rf out6
+          make O=out6 LLVM=1 surya_defconfig
 
-      - name: Build BOOTFIX5A Image
+          base64 -d "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.config.gz.b64" | gzip -dc > ../wih-riwut-a10-delta.config
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cfg_path = Path('out6/.config')
+          delta_path = Path('../wih-riwut-a10-delta.config')
+          lines = cfg_path.read_text().splitlines()
+          pos = {}
+          for i, line in enumerate(lines):
+              if line.startswith('CONFIG_') and '=' in line:
+                  pos[line.split('=', 1)[0]] = i
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
+                  pos[line.split()[1]] = i
+
+          applied = []
+          for line in delta_path.read_text().splitlines():
+              line = line.strip()
+              if not line:
+                  continue
+              if line.startswith('CONFIG_') and '=' in line:
+                  key = line.split('=', 1)[0]
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
+                  key = line.split()[1]
+              else:
+                  continue
+              if key in pos:
+                  lines[pos[key]] = line
+              else:
+                  pos[key] = len(lines)
+                  lines.append(line)
+              applied.append(line)
+
+          cfg_path.write_text('\n'.join(lines) + '\n')
+          Path('../delta-applied-before-olddefconfig.txt').write_text('\n'.join(applied) + '\n')
+          print('delta lines applied:', len(applied))
+          PY
+
+          # Diagnostic boot baseline: keep KernelSU disabled until 4.14.355 itself boots.
+          scripts/config --file out6/.config --disable KSU
+          scripts/config --file out6/.config --set-str LOCALVERSION "-riwutz_josjiz"
+          scripts/config --file out6/.config --disable LOCALVERSION_AUTO
+          make O=out6 LLVM=1 olddefconfig
+
+          cp out6/.config ../bootfix6.config
+
+          python3 - <<'PY'
+          from pathlib import Path
+          def parse(lines):
+              d={}
+              for line in lines:
+                  if line.startswith('CONFIG_') and '=' in line:
+                      d[line.split('=',1)[0]]=line
+                  elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
+                      d[line.split()[1]]=line
+              return d
+          req=parse(Path('../wih-riwut-a10-delta.config').read_text().splitlines())
+          fin=parse(Path('out6/.config').read_text().splitlines())
+          rejected=[]
+          for k,v in sorted(req.items()):
+              if fin.get(k) != v:
+                  rejected.append(f'{k}\n  requested: {v}\n  final:     {fin.get(k, "<absent>")}')
+          Path('../delta-rejected-after-olddefconfig.txt').write_text('\n'.join(rejected)+'\n')
+          print('delta mismatches after olddefconfig:', len(rejected))
+          PY
+
+          {
+            grep -E '^(CONFIG_(MEMCG|MODULES|SCHED_WALT|SCHED_CORE_CTL|SCHED_TUNE|FAIR_GROUP_SCHED|PSTORE|PCI_MSM|MSM_GCC_SM6150|MSM_DISPCC_SM6150|MSM_GPUCC_SM6150|PINCTRL_SM6150|SCSI_UFS_QCOM_ICE|MMC_SDHCI_MSM_ICE|BUILD_ARM64_APPENDED_DTB_IMAGE|IMG_GZ_DTB)=|# CONFIG_(KSU|UCLAMP_TASK|UCLAMP_TASK_GROUP) is not set)' out6/.config || true
+          } | tee ../bootfix6-key-config.txt
+
+          grep -q '^# CONFIG_KSU is not set$' out6/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out6/.config
+
+      - name: Build BOOTFIX6 4.14.355 Image
         working-directory: kernel
         env:
           KBUILD_BUILD_USER: riwutz
           KBUILD_BUILD_HOST: cahazzu
         run: |
           set -o pipefail
-          make O=out5a -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee ../bootfix5A-build.log
-          test -s out5a/arch/arm64/boot/Image.gz
-          cp out5a/arch/arm64/boot/Image.gz ../Image-BOOTFIX5A.gz
-          gzip -dc out5a/arch/arm64/boot/Image.gz > ../Image-BOOTFIX5A.raw
-          strings ../Image-BOOTFIX5A.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee ../bootfix5A-version.txt
-          ! strings ../Image-BOOTFIX5A.raw | grep -q 'KernelSU:'
-          rm -f ../Image-BOOTFIX5A.raw
-          sha256sum ../Image-BOOTFIX5A.gz | tee ../Image-BOOTFIX5A.gz.sha256
+          make O=out6 -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee ../bootfix6-build.log
+          test -s out6/arch/arm64/boot/Image.gz
+          cp out6/arch/arm64/boot/Image.gz ../Image-BOOTFIX6.gz
+          gzip -dc out6/arch/arm64/boot/Image.gz > ../Image-BOOTFIX6.raw
+          strings ../Image-BOOTFIX6.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee ../bootfix6-version.txt
+          ! strings ../Image-BOOTFIX6.raw | grep -q 'KernelSU:'
+          rm -f ../Image-BOOTFIX6.raw
+          sha256sum ../Image-BOOTFIX6.gz | tee ../Image-BOOTFIX6.gz.sha256
 
-      - name: Configure BOOTFIX5B donor-like scheduler KSU ON
-        working-directory: kernel
-        run: |
-          rm -rf out5b
-          make O=out5b LLVM=1 surya_defconfig
-          scripts/config --file out5b/.config --enable KSU
-          scripts/config --file out5b/.config --disable UCLAMP_TASK
-          scripts/config --file out5b/.config --disable UCLAMP_TASK_GROUP
-          scripts/config --file out5b/.config --disable UCLAMP_BUCKETS_COUNT
-          scripts/config --file out5b/.config --enable SCHED_TUNE
-          scripts/config --file out5b/.config --enable FAIR_GROUP_SCHED
-          scripts/config --file out5b/.config --set-str LOCALVERSION "-riwutz_josjiz"
-          scripts/config --file out5b/.config --disable LOCALVERSION_AUTO
-          make O=out5b LLVM=1 olddefconfig
-          grep -q '^CONFIG_KSU=y$' out5b/.config
-          grep -q '^CONFIG_SCHED_TUNE=y$' out5b/.config
-          grep -q '^CONFIG_FAIR_GROUP_SCHED=y$' out5b/.config
-          ! grep -q '^CONFIG_UCLAMP_TASK=y$' out5b/.config
-          ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' out5b/.config
-          cp out5b/.config ../bootfix5B.config
-
-      - name: Build BOOTFIX5B Image
-        working-directory: kernel
-        env:
-          KBUILD_BUILD_USER: riwutz
-          KBUILD_BUILD_HOST: cahazzu
-        run: |
-          set -o pipefail
-          make O=out5b -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee ../bootfix5B-build.log
-          test -s out5b/arch/arm64/boot/Image.gz
-          cp out5b/arch/arm64/boot/Image.gz ../Image-BOOTFIX5B.gz
-          gzip -dc out5b/arch/arm64/boot/Image.gz > ../Image-BOOTFIX5B.raw
-          strings ../Image-BOOTFIX5B.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee ../bootfix5B-version.txt
-          strings ../Image-BOOTFIX5B.raw | grep -m3 -E 'KernelSU|KSU_VERSION' > ../bootfix5B-ksu-strings.txt || true
-          rm -f ../Image-BOOTFIX5B.raw
-          sha256sum ../Image-BOOTFIX5B.gz | tee ../Image-BOOTFIX5B.gz.sha256
-
-      - name: Upload BOOTFIX5 images and diagnostics
+      - name: Upload BOOTFIX6 image and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riwutz_josjiz-BOOTFIX5-A10
+          name: riwutz_josjiz-BOOTFIX6-A10-REFCONFIG
           if-no-files-found: warn
           retention-days: 30
           path: |
-            Image-BOOTFIX5A.gz
-            Image-BOOTFIX5A.gz.sha256
-            Image-BOOTFIX5B.gz
-            Image-BOOTFIX5B.gz.sha256
-            bootfix5A.config
-            bootfix5B.config
-            bootfix5A-build.log
-            bootfix5B-build.log
-            bootfix5A-version.txt
-            bootfix5B-version.txt
-            bootfix5B-ksu-strings.txt
+            Image-BOOTFIX6.gz
+            Image-BOOTFIX6.gz.sha256
+            bootfix6.config
+            bootfix6-build.log
+            bootfix6-version.txt
+            bootfix6-key-config.txt
+            wih-riwut-a10-delta.config
+            delta-applied-before-olddefconfig.txt
+            delta-rejected-after-olddefconfig.txt
             exact-base.txt
             clang-version.txt
             llvm-20.1.0.sha256
