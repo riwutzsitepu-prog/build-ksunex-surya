@@ -223,6 +223,37 @@ if 'susfs_set_zygote_sid();' not in s:
     s = s.replace(anchor, block + anchor, 1)
 p.write_text(s)
 
+# SUSFS v1.5.4 exports ksu_access_ok because core_hook.c calls it, while
+# KSU Next v1.1.1 also has a private static-inline helper with the same name.
+# Keep the exported SUSFS implementation and remove only the duplicate private
+# helper. ksu_strncpy_from_user_retry() can safely call the exported function.
+p = root / 'kernel_compat.c'
+s = p.read_text()
+private_access_ok = '''static inline int ksu_access_ok(const void *addr, unsigned long size)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
+\treturn access_ok(addr, size);
+#else
+\treturn access_ok(VERIFY_READ, addr, size);
+#endif
+}
+
+'''
+if 'int ksu_access_ok(const void *addr, unsigned long size) {' not in s:
+    raise SystemExit('kernel_compat: SUSFS exported ksu_access_ok missing')
+if private_access_ok in s:
+    s = s.replace(private_access_ok, '', 1)
+defs = re.findall(r'(?m)^(?:static\s+inline\s+)?int\s+ksu_access_ok\s*\(', s)
+if len(defs) != 1:
+    raise SystemExit(f'kernel_compat: expected exactly one ksu_access_ok definition, got {len(defs)}')
+p.write_text(s)
+
+p = root / 'kernel_compat.h'
+s = p.read_text()
+if 'extern int ksu_access_ok(const void *addr, unsigned long size);' not in s:
+    raise SystemExit('kernel_compat.h: exported ksu_access_ok declaration missing')
+p.write_text(s)
+
 # KSU Next v1.1.1 is exactly driver 12851. Pin it after the SUSFS patch so
 # copied/symlinked source cannot fall back to the no-.git version.
 p = root / 'Makefile'
@@ -240,8 +271,8 @@ p.write_text(s)
 
 # Normalize trailing patch artifacts.
 for rel in ('Kconfig', 'apk_sign.c', 'apk_sign.h', 'core_hook.c',
-            'selinux/rules.c', 'selinux/selinux.c', 'sucompat.c',
-            'throne_tracker.c'):
+            'kernel_compat.c', 'kernel_compat.h', 'selinux/rules.c',
+            'selinux/selinux.c', 'sucompat.c', 'throne_tracker.c'):
     p = root / rel
     if not p.exists():
         continue
@@ -255,6 +286,8 @@ checks = {
     'Makefile': ['KSU_VERSION := 12851'],
     'apk_sign.c': ['bool ksu_is_manager_apk(char *path)'],
     'core_hook.c': ['susfs_on_post_fs_data', 'susfs_try_umount_all(new_uid.val);'],
+    'kernel_compat.c': ['int ksu_access_ok(const void *addr, unsigned long size) {'],
+    'kernel_compat.h': ['extern int ksu_access_ok(const void *addr, unsigned long size);'],
     'selinux/rules.c': ['void ksu_apply_kernelsu_rules()', 'susfs_set_zygote_sid();'],
 }
 for rel, tokens in checks.items():
