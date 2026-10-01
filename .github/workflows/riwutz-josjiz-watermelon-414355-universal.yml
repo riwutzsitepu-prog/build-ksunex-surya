@@ -6,7 +6,8 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/riwutz-josjiz-watermelon-414355-universal.yml'
-      - 'scripts/cahazzu_manual_hooks.py'
+      - 'scripts/riwutz_josjiz_ksu_v154_compat.py'
+      - 'scripts/riwutz_josjiz_kernel_compat.py'
 
 permissions:
   contents: read
@@ -19,144 +20,237 @@ jobs:
       KERNEL_REPO: https://github.com/xradens/msm-4.14.git
       KERNEL_COMMIT: 95dffb0397b21a8a54fefec47801ab460be5532f
       KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next.git
+      KSU_TAG: v1.1.1
       KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
       SUSFS_REPO: https://github.com/yatendra1999/susfs4ksu.git
       SUSFS_COMMIT: 96750ec8cb280c22534875ebaaad360cefdec77b
+      AK3_REPO: https://github.com/xradens/AnyKernel3.git
+      AK3_BRANCH: watermelon
+      KERNEL_NAME: riwutz_josjiz
       ZIP_NAME: riwutz_josjiz.zip
+      CLANG_URL: https://github.com/greenforce-project/greenforce_clang/releases/download/24072024/greenforce-clang-20.0.0git-24072024.tar.zst
+      CLANG_SHA256: 1bdea29ba34c13b672803d3ef26adbb955a33cb79cd4b6c8a6e01f545b61da52
+      LLVM_COMMIT: fad17b43dbc09ac7e0a95535459845f72c2b739a
 
     steps:
       - name: Checkout builder
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install build dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bc bison build-essential ca-certificates cpio curl device-tree-compiler file flex git libelf-dev libssl-dev make patch python3 python-is-python3 rsync unzip xz-utils zip zstd
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl device-tree-compiler \
+            file flex git libelf-dev libssl-dev make patch python3 rsync unzip \
+            xz-utils zip zstd
 
-      - name: Fetch exact Watermelon source and make A10/A11 trees
+      - name: Checkout exact Watermelon 4.14.355 source
         run: |
           set -euxo pipefail
-          git init kernel-base
-          git -C kernel-base remote add origin "$KERNEL_REPO"
-          git -C kernel-base fetch --depth=1 origin "$KERNEL_COMMIT"
-          git -C kernel-base checkout --detach FETCH_HEAD
-          test "$(git -C kernel-base rev-parse HEAD)" = "$KERNEL_COMMIT"
-          grep -Fx 'VERSION = 4' kernel-base/Makefile
-          grep -Fx 'PATCHLEVEL = 14' kernel-base/Makefile
-          grep -Fx 'SUBLEVEL = 355' kernel-base/Makefile
-          cp -a kernel-base kernel-a10
-          cp -a kernel-base kernel-a11
+          git init kernel
+          git -C kernel remote add origin "$KERNEL_REPO"
+          git -C kernel fetch --depth=1 origin "$KERNEL_COMMIT"
+          git -C kernel checkout --detach FETCH_HEAD
+          test "$(git -C kernel rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -Fx 'VERSION = 4' kernel/Makefile
+          grep -Fx 'PATCHLEVEL = 14' kernel/Makefile
+          grep -Fx 'SUBLEVEL = 355' kernel/Makefile
+          sed -i 's/^EXTRAVERSION =.*/EXTRAVERSION =/' kernel/Makefile
+          git -C kernel rev-parse HEAD | tee watermelon-source-sha.txt
 
-      - name: Fetch exact KSU Next v1.1.1 and SUSFS v1.5.4
+      - name: Prepare pinned Watermelon clang 20 toolchain
         run: |
           set -euxo pipefail
-          git clone "$KSU_REPO" ksu-src
-          git -C ksu-src checkout --detach "$KSU_COMMIT"
-          test "$(git -C ksu-src describe --tags --exact-match)" = 'v1.1.1'
-          KSU_COUNT="$(git -C ksu-src rev-list --count HEAD)"
+          mkdir -p tc/extract tc/clang-20
+          curl -L --fail --retry 5 --retry-delay 3 -o /tmp/greenforce-clang-20.tar.zst "$CLANG_URL"
+          echo "$CLANG_SHA256  /tmp/greenforce-clang-20.tar.zst" | sha256sum -c -
+          tar --zstd -xf /tmp/greenforce-clang-20.tar.zst -C tc/extract
+          CLANG_BIN="$(find tc/extract -path '*/bin/clang' -print -quit)"
+          test -n "$CLANG_BIN"
+          CLANG_ROOT="$(dirname "$(dirname "$CLANG_BIN")")"
+          cp -a "$CLANG_ROOT"/. tc/clang-20/
+          test -x tc/clang-20/bin/clang
+          tc/clang-20/bin/clang --version | head -n3 | tee compiler.txt
+          grep -q "$LLVM_COMMIT" compiler.txt
+
+      - name: Integrate KSU Next v1.1.1 driver 12851 and SUSFS v1.5.4
+        run: |
+          set -euxo pipefail
+          git clone --branch "$KSU_TAG" --single-branch "$KSU_REPO" ksu-next
+          test "$(git -C ksu-next rev-parse HEAD)" = "$KSU_COMMIT"
+          KSU_COUNT="$(git -C ksu-next rev-list --count HEAD)"
           KSU_VERSION="$((10000 + KSU_COUNT + 200))"
           echo "KSU_COUNT=$KSU_COUNT KSU_VERSION=$KSU_VERSION"
           test "$KSU_VERSION" = '12851'
+
           git clone "$SUSFS_REPO" susfs
           git -C susfs checkout --detach "$SUSFS_COMMIT"
+          test "$(git -C susfs rev-parse HEAD)" = "$SUSFS_COMMIT"
           grep -q 'SUSFS_VERSION "v1.5.4"' susfs/kernel_patches/include/linux/susfs.h
 
-      - name: Patch A10 and A11-A12 trees
+          cd ksu-next
+          set +e
+          patch -p1 --forward < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          KSU_PATCH_RC=$?
+          set -e
+          echo "SUSFS v1.5.4 KSU patch rc=$KSU_PATCH_RC"
+          find kernel -name '*.rej' -print | sort || true
+          cd ..
+
+          python3 scripts/riwutz_josjiz_ksu_v154_compat.py
+          find ksu-next/kernel -name '*.rej' -delete
+          find ksu-next/kernel -name '*.orig' -delete
+          grep -q '^KSU_VERSION := 12851$' ksu-next/kernel/Makefile
+          grep -q 'bool ksu_is_manager_apk(char \*path)' ksu-next/kernel/apk_sign.c
+          grep -q 'susfs_on_post_fs_data' ksu-next/kernel/core_hook.c
+          grep -q 'susfs_try_umount_all(new_uid.val)' ksu-next/kernel/core_hook.c
+          grep -q 'susfs_set_zygote_sid' ksu-next/kernel/selinux/rules.c
+          git -C ksu-next diff --check
+
+          cp -a susfs/kernel_patches/fs/. kernel/fs/
+          cp -a susfs/kernel_patches/include/linux/. kernel/include/linux/
+
+          cd kernel
+          set +e
+          patch -p1 --forward < ../susfs/kernel_patches/50_add_susfs_in_kernel-4.14.patch
+          KERNEL_PATCH_RC=$?
+          set -e
+          echo "SUSFS v1.5.4 Watermelon patch rc=$KERNEL_PATCH_RC"
+          find . -name '*.rej' -print | sort || true
+          cd ..
+
+          python3 scripts/riwutz_josjiz_kernel_compat.py
+          find kernel -name '*.rej' -delete
+          find kernel -name '*.orig' -delete
+          test -f kernel/fs/susfs.c
+          grep -q 'SUSFS_VERSION "v1.5.4"' kernel/include/linux/susfs.h
+          grep -q 'susfs_spoof_cmdline_or_bootconfig' kernel/fs/proc/cmdline.c
+          grep -q 'susfs_sus_ino_for_show_map_vma' kernel/fs/proc/task_mmu.c
+          grep -q 'susfs_spoof_uname(&tmp)' kernel/kernel/sys.c
+          grep -q 'TASK_STRUCT_NON_ROOT_USER_APP_PROC' kernel/fs/dcache.c
+          ! find kernel -name '*.rej' -print -quit | grep -q .
+
+          rm -rf kernel/drivers/kernelsu
+          ln -s ../../ksu-next/kernel kernel/drivers/kernelsu
+          grep -q 'kernelsu' kernel/drivers/Makefile || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> kernel/drivers/Makefile
+          grep -q 'drivers/kernelsu/Kconfig' kernel/drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' kernel/drivers/Kconfig
+          test -f kernel/drivers/kernelsu/Kconfig
+
+      - name: Apply targeted Wi-Fi toggle stabilization patch
         run: |
           set -euxo pipefail
-          for tree in kernel-a10 kernel-a11; do
-            rm -rf "$tree/KernelSU-Next" "$tree/drivers/kernelsu"
-            cp -a ksu-src "$tree/KernelSU-Next"
-            ln -s ../KernelSU-Next/kernel "$tree/drivers/kernelsu"
-
-            cp susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "$tree/KernelSU-Next/"
-            (cd "$tree/KernelSU-Next" && patch -p1 --forward < 10_enable_susfs_for_ksu.patch)
-            cp -a susfs/kernel_patches/fs/. "$tree/fs/"
-            cp -a susfs/kernel_patches/include/. "$tree/include/"
-            (cd "$tree" && patch -p1 --forward < ../susfs/kernel_patches/50_add_susfs_in_kernel-4.14.patch)
-
-            python3 scripts/cahazzu_manual_hooks.py --help >/dev/null 2>&1 || true
-            (cd "$tree" && python3 "$GITHUB_WORKSPACE/scripts/cahazzu_manual_hooks.py")
-
-            python3 - "$tree" <<'PY'
-          import sys
+          cd kernel
+          python3 - <<'PY'
           from pathlib import Path
-          root=Path(sys.argv[1])
-          p=root/'drivers/staging/qcacld-3.0/Kbuild'
-          s=p.read_text()
-          block='ifneq ($(CONFIG_IRQ_SBALANCE), y)\ncppflags-y += -DHIF_IRQ_AFFINITY\nendif\n'
-          if block not in s:
-              raise SystemExit(f'Wi-Fi HIF_IRQ_AFFINITY block not found in {p}')
-          p.write_text(s.replace(block,'',1))
+          p = Path('drivers/staging/qcacld-3.0/Kbuild')
+          s = p.read_text()
+          old = 'ifneq ($(CONFIG_IRQ_SBALANCE), y)\ncppflags-y += -DHIF_IRQ_AFFINITY\nendif\n'
+          if old not in s:
+              raise SystemExit('Expected HIF_IRQ_AFFINITY block not found')
+          p.write_text(s.replace(old, '', 1))
           PY
+          ! grep -A4 -B2 'FEATURE_NAPI' drivers/staging/qcacld-3.0/Kbuild | grep -q HIF_IRQ_AFFINITY
+          git diff -- drivers/staging/qcacld-3.0/Kbuild | tee "$GITHUB_WORKSPACE/wifi-fix.diff"
 
-            sed -i 's/^EXTRAVERSION = .*/EXTRAVERSION =/' "$tree/Makefile"
-            sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-riwutz_josjiz"/' "$tree/arch/arm64/configs/surya_defconfig"
-            sed -i 's/^CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' "$tree/arch/arm64/configs/surya_defconfig"
-            printf '\nCONFIG_KSU=y\n# CONFIG_KSU_KPROBES_HOOK is not set\nCONFIG_KSU_SUSFS=y\nCONFIG_KSU_SUSFS_SUS_PATH=y\nCONFIG_KSU_SUSFS_SUS_MOUNT=y\nCONFIG_KSU_SUSFS_SUS_KSTAT=y\nCONFIG_KSU_SUSFS_TRY_UMOUNT=y\nCONFIG_KSU_SUSFS_SPOOF_UNAME=y\nCONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y\nCONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$tree/arch/arm64/configs/surya_defconfig"
-          done
-
-          sed -i '/^CONFIG_UCLAMP_TASK=/d;/^CONFIG_UCLAMP_BUCKETS_COUNT=/d;/^CONFIG_UCLAMP_TASK_GROUP=/d' kernel-a10/arch/arm64/configs/surya_defconfig
-          sed -i 's/^# CONFIG_SCHED_TUNE is not set/CONFIG_SCHED_TUNE=y/' kernel-a10/arch/arm64/configs/surya_defconfig
-
-      - name: Build Android 10 payload
-        working-directory: kernel-a10
+      - name: Build A11-A12 payload
         run: |
           set -euxo pipefail
-          export KBUILD_BUILD_USER=nobody KBUILD_BUILD_HOST=android-build
-          bash build.sh --clean --su
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/tc/clang-20/bin:$PATH"
+          export KBUILD_BUILD_USER=riwutz
+          export KBUILD_BUILD_HOST=josjiz
+          rm -rf out
+          make LLVM=1 surya_defconfig
+          scripts/config --file out/.config --set-str LOCALVERSION "-$KERNEL_NAME"
+          scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          scripts/config --file out/.config --enable KSU
+          scripts/config --file out/.config --enable KSU_SUSFS
+          scripts/config --file out/.config --disable KSU_DEBUG
+          make LLVM=1 olddefconfig
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' out/.config
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS=y$' out/.config
+          make -j"$(nproc)" LLVM=1 Image.gz dtb.img dtbo.img 2>&1 | tee "$GITHUB_WORKSPACE/build-a11-a12.log"
+          test -s out/arch/arm64/boot/Image.gz
+          test -s out/arch/arm64/boot/dtb.img
+          test -s out/arch/arm64/boot/dtbo.img
+          mkdir -p "$GITHUB_WORKSPACE/payload/a11_a12"
+          cp out/arch/arm64/boot/{Image.gz,dtb.img,dtbo.img} "$GITHUB_WORKSPACE/payload/a11_a12/"
+
+      - name: Build Android 10 payload with SchedTune compatibility
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export PATH="$GITHUB_WORKSPACE/tc/clang-20/bin:$PATH"
+          export KBUILD_BUILD_USER=riwutz
+          export KBUILD_BUILD_HOST=josjiz
+          rm -rf out
+          make LLVM=1 surya_defconfig
+          scripts/config --file out/.config --set-str LOCALVERSION "-$KERNEL_NAME"
+          scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          scripts/config --file out/.config --enable KSU
+          scripts/config --file out/.config --enable KSU_SUSFS
+          scripts/config --file out/.config --disable KSU_DEBUG
+          scripts/config --file out/.config --disable UCLAMP_TASK
+          scripts/config --file out/.config --disable UCLAMP_TASK_GROUP
+          scripts/config --file out/.config --enable SCHED_TUNE
+          make LLVM=1 olddefconfig
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_KSU_SUSFS=y$' out/.config
+          grep -q '^CONFIG_SCHED_TUNE=y$' out/.config
+          make -j"$(nproc)" LLVM=1 Image.gz dtb.img dtbo.img 2>&1 | tee "$GITHUB_WORKSPACE/build-a10.log"
           test -s out/arch/arm64/boot/Image.gz
           test -s out/arch/arm64/boot/dtb.img
           test -s out/arch/arm64/boot/dtbo.img
           mkdir -p "$GITHUB_WORKSPACE/payload/a10"
           cp out/arch/arm64/boot/{Image.gz,dtb.img,dtbo.img} "$GITHUB_WORKSPACE/payload/a10/"
-          strings out/arch/arm64/boot/Image.gz 2>/dev/null | grep -m1 riwutz_josjiz || true
 
-      - name: Build Android 11-12 payload
-        working-directory: kernel-a11
+      - name: Package one autodetect A10-A12 AnyKernel ZIP
         run: |
           set -euxo pipefail
-          export KBUILD_BUILD_USER=nobody KBUILD_BUILD_HOST=android-build
-          bash build.sh --clean --su
-          test -s out/arch/arm64/boot/Image.gz
-          test -s out/arch/arm64/boot/dtb.img
-          test -s out/arch/arm64/boot/dtbo.img
-          mkdir -p "$GITHUB_WORKSPACE/payload/a11"
-          cp out/arch/arm64/boot/{Image.gz,dtb.img,dtbo.img} "$GITHUB_WORKSPACE/payload/a11/"
-
-      - name: Package one autodetect A10-A12 ZIP
-        run: |
-          set -euxo pipefail
-          git clone --depth=1 -b watermelon https://github.com/xradens/AnyKernel3.git ak3
+          git clone --depth=1 -b "$AK3_BRANCH" "$AK3_REPO" ak3
           rm -rf ak3/.git ak3/Image.gz ak3/dtb.img ak3/dtbo.img
-          mkdir -p ak3/payload/a10 ak3/payload/a11
+          mkdir -p ak3/payload/a10 ak3/payload/a11_a12
           cp payload/a10/* ak3/payload/a10/
-          cp payload/a11/* ak3/payload/a11/
+          cp payload/a11_a12/* ak3/payload/a11_a12/
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('ak3/anykernel.sh')
-          s=p.read_text()
-          s=s.replace('kernel.string=OSS Kernel | POCO X3/NFC','kernel.string=riwutz_josjiz')
-          s=s.replace('supported.versions=11-16','supported.versions=10-12')
-          needle='. tools/ak3-core.sh;\n\n# boot install\n'
-          insert='''. tools/ak3-core.sh;\n\n# riwutz_josjiz A10/A11-A12 autodetect\nANDROID_VER=$(getprop ro.build.version.release 2>/dev/null | cut -d. -f1);\ncase "$ANDROID_VER" in\n  10) PAYLOAD=a10;;\n  11|12) PAYLOAD=a11;;\n  *) abort "Unsupported Android version: $ANDROID_VER";;\nesac;\nui_print "riwutz_josjiz: Android $ANDROID_VER -> $PAYLOAD";\ncp -f "$AKHOME/payload/$PAYLOAD/Image.gz" "$AKHOME/Image.gz";\ncp -f "$AKHOME/payload/$PAYLOAD/dtb.img" "$AKHOME/dtb.img";\ncp -f "$AKHOME/payload/$PAYLOAD/dtbo.img" "$AKHOME/dtbo.img";\n\n# boot install\n'''
+          import re
+          p = Path('ak3/anykernel.sh')
+          s = p.read_text()
+          s = re.sub(r'^kernel\.string=.*$', 'kernel.string=riwutz_josjiz', s, flags=re.M)
+          s = re.sub(r'^supported\.versions=.*$', 'supported.versions=10-12', s, flags=re.M)
+          needle = '. tools/ak3-core.sh;\n\n# boot install\n'
+          insert = '''. tools/ak3-core.sh;\n\n# riwutz_josjiz universal payload selector\nANDROID_VER=$(getprop ro.build.version.release 2>/dev/null | cut -d. -f1);\ncase "$ANDROID_VER" in\n  10) PAYLOAD=a10;;\n  11|12) PAYLOAD=a11_a12;;\n  *) abort "riwutz_josjiz: unsupported Android $ANDROID_VER";;\nesac;\nui_print "riwutz_josjiz: Android $ANDROID_VER -> $PAYLOAD";\ncp -f "$AKHOME/payload/$PAYLOAD/Image.gz" "$AKHOME/Image.gz";\ncp -f "$AKHOME/payload/$PAYLOAD/dtb.img" "$AKHOME/dtb.img";\ncp -f "$AKHOME/payload/$PAYLOAD/dtbo.img" "$AKHOME/dtbo.img";\n\n# boot install\n'''
           if needle not in s:
               raise SystemExit('AnyKernel install anchor not found')
-          p.write_text(s.replace(needle,insert,1))
+          p.write_text(s.replace(needle, insert, 1))
           PY
           (cd ak3 && zip -r9 "../$ZIP_NAME" . -x '*.git*' 'README.md')
+          unzip -t "$ZIP_NAME" | tee zip-test.txt
           unzip -l "$ZIP_NAME" | tee zip-list.txt
           test "$(unzip -l "$ZIP_NAME" | grep -c 'payload/a10/Image.gz')" -eq 1
-          test "$(unzip -l "$ZIP_NAME" | grep -c 'payload/a11/Image.gz')" -eq 1
+          test "$(unzip -l "$ZIP_NAME" | grep -c 'payload/a11_a12/Image.gz')" -eq 1
+          grep -q 'supported.versions=10-12' ak3/anykernel.sh
+          grep -q 'kernel.string=riwutz_josjiz' ak3/anykernel.sh
           sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
 
-      - name: Upload final riwutz_josjiz
+      - name: Upload final package and diagnostic logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riwutz_josjiz-final
+          name: riwutz_josjiz-run-output
           path: |
             riwutz_josjiz.zip
             riwutz_josjiz.zip.sha256
-            clang-version.txt
-          if-no-files-found: error
+            compiler.txt
+            watermelon-source-sha.txt
+            wifi-fix.diff
+            build-a11-a12.log
+            build-a10.log
+            zip-test.txt
+            zip-list.txt
+          if-no-files-found: warn
