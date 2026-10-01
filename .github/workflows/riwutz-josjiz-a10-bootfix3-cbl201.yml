@@ -44,29 +44,77 @@ jobs:
           set +e
           git cherry-pick 7acba8aadf95dea99ac20523799dbe4373a81391 > ../cherry-pick-scheduler.log 2>&1
           RC1=$?
-          if [ "$RC1" -ne 0 ]; then
-            git status --short | tee ../cherry-pick-status.txt
-            git diff --name-only --diff-filter=U | tee ../conflict-files.txt
-            git diff > ../cherry-pick-conflict.diff
-            cat ../cherry-pick-scheduler.log
-            exit "$RC1"
-          fi
-
-          git cherry-pick 055b48f3fb1c6d0651bf4e84fdd296cddd051299 > ../cherry-pick-defconfig.log 2>&1
-          RC2=$?
-          if [ "$RC2" -ne 0 ]; then
-            git status --short | tee ../cherry-pick-status.txt
-            git diff --name-only --diff-filter=U | tee ../conflict-files.txt
-            git diff > ../cherry-pick-conflict.diff
-            cat ../cherry-pick-defconfig.log
-            exit "$RC2"
-          fi
           set -e
 
-          git log -3 --oneline | tee ../bootfix4-gitlog.txt
+          if [ "$RC1" -ne 0 ]; then
+            git diff --name-only --diff-filter=U | sort | tee ../conflict-files.txt
+            printf '%s\n' \
+              kernel/sched/cpufreq_schedutil.c \
+              kernel/sched/fair.c > ../expected-conflicts.txt
+            diff -u ../expected-conflicts.txt ../conflict-files.txt
+
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          files = [
+              Path('kernel/sched/cpufreq_schedutil.c'),
+              Path('kernel/sched/fair.c'),
+          ]
+          pat = re.compile(
+              r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> 7acba8aad \(sched: Revert UClamp backports\)\n',
+              re.S,
+          )
+          for path in files:
+              text = path.read_text()
+              new, count = pat.subn(lambda m: m.group(2), text)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected exactly 1 conflict, got {count}')
+              if '<<<<<<<' in new or '=======' in new or '>>>>>>>' in new:
+                  raise SystemExit(f'{path}: conflict marker remains')
+              path.write_text(new)
+          PY
+
+            git add kernel/sched/cpufreq_schedutil.c kernel/sched/fair.c
+            GIT_EDITOR=true git cherry-pick --continue
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('arch/arm64/configs/surya_defconfig')
+          lines = p.read_text().splitlines()
+          out = []
+          seen_schedtune = False
+          for line in lines:
+              if line in {
+                  'CONFIG_UCLAMP_TASK=y',
+                  'CONFIG_UCLAMP_TASK_GROUP=y',
+                  'CONFIG_UCLAMP_BUCKETS_COUNT=20',
+              }:
+                  continue
+              if line == '# CONFIG_SCHED_TUNE is not set':
+                  out.append('CONFIG_SCHED_TUNE=y')
+                  seen_schedtune = True
+                  continue
+              if line == 'CONFIG_SCHED_TUNE=y':
+                  seen_schedtune = True
+              out.append(line)
+          if not seen_schedtune:
+              out.append('CONFIG_SCHED_TUNE=y')
+          p.write_text('\n'.join(out) + '\n')
+          PY
+
+          git add arch/arm64/configs/surya_defconfig
+          if ! git diff --cached --quiet; then
+            git commit -m 'defconfig: Switch back to SchedTune (exact-base backport)'
+          fi
+
+          git log -4 --oneline | tee ../bootfix4-gitlog.txt
           grep -q '^CONFIG_SCHED_TUNE=y$' arch/arm64/configs/surya_defconfig
           ! grep -q '^CONFIG_UCLAMP_TASK=y$' arch/arm64/configs/surya_defconfig
           ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' arch/arm64/configs/surya_defconfig
+          ! grep -q '^CONFIG_UCLAMP_BUCKETS_COUNT=' arch/arm64/configs/surya_defconfig
+          git status --short | tee ../post-backport-status.txt
 
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
         run: |
@@ -146,7 +194,6 @@ jobs:
             embedded-version.txt
             ksu-strings.txt
             cherry-pick-scheduler.log
-            cherry-pick-defconfig.log
-            cherry-pick-status.txt
             conflict-files.txt
-            cherry-pick-conflict.diff
+            expected-conflicts.txt
+            post-backport-status.txt
