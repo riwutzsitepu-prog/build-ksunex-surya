@@ -57,17 +57,17 @@ jobs:
           from pathlib import Path
           import re
 
-          files = [
-              Path('kernel/sched/cpufreq_schedutil.c'),
-              Path('kernel/sched/fair.c'),
-          ]
           pat = re.compile(
               r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> 7acba8aad \(sched: Revert UClamp backports\)\n',
               re.S,
           )
-          for path in files:
+          choices = {
+              Path('kernel/sched/cpufreq_schedutil.c'): 2,  # remove UClamp block: take revert side
+              Path('kernel/sched/fair.c'): 1,               # exact base has no LBF_IGNORE_STUNE_BOOSTED_TASKS
+          }
+          for path, group in choices.items():
               text = path.read_text()
-              new, count = pat.subn(lambda m: m.group(2), text)
+              new, count = pat.subn(lambda m, g=group: m.group(g), text)
               if count != 1:
                   raise SystemExit(f'{path}: expected exactly 1 conflict, got {count}')
               if '<<<<<<<' in new or '=======' in new or '>>>>>>>' in new:
@@ -114,6 +114,7 @@ jobs:
           ! grep -q '^CONFIG_UCLAMP_TASK=y$' arch/arm64/configs/surya_defconfig
           ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' arch/arm64/configs/surya_defconfig
           ! grep -q '^CONFIG_UCLAMP_BUCKETS_COUNT=' arch/arm64/configs/surya_defconfig
+          ! grep -q 'LBF_IGNORE_STUNE_BOOSTED_TASKS' kernel/sched/fair.c
           git status --short | tee ../post-backport-status.txt
 
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
