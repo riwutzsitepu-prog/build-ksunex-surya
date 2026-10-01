@@ -132,7 +132,6 @@ allow_anchor = '\tif (ksu_is_allow_uid(new_uid.val)) {\n'
 if 'current->susfs_task_state |= TASK_STRUCT_NON_ROOT_USER_APP_PROC' not in s:
     if allow_anchor not in s:
         raise SystemExit('core_hook: allow uid anchor missing')
-    # Insert after the allow-uid block by locating its return and close.
     pos = s.find(allow_anchor)
     end = s.find('\n\t}\n', pos)
     if end < 0:
@@ -197,15 +196,17 @@ for token in (
         raise SystemExit(f'core_hook compatibility token missing: {token}')
 p.write_text(s)
 
-# SELinux rules: repair all v1.5.4 rejects on KSU Next v1.1.1.
+# SELinux rules: KSU Next v1.1.1 protects the policy update with ksu_rules
+# mutex; the legacy SUSFS patch expected rcu_read_unlock(). Insert the SUSFS
+# rules immediately before the actual KSU Next unlock point instead.
 p = root / 'selinux/rules.c'
 s = p.read_text()
 s = s.replace('void apply_kernelsu_rules()', 'void ksu_apply_kernelsu_rules()', 1)
 s = s.replace('int handle_sepolicy(', 'int ksu_handle_sepolicy(', 1)
 s = re.sub(r'(?<![A-Za-z0-9_])getenforce\(\)', 'ksu_getenforce()', s)
 if 'susfs_set_zygote_sid();' not in s:
-    anchor = '\trcu_read_unlock();\n'
     block = '''#ifdef CONFIG_KSU_SUSFS
+\t// Allow umount in zygote process without requiring zygisk.
 \tksu_allow(db, "zygote", "labeledfs", "filesystem", "unmount");
 \tsusfs_set_init_sid();
 \tsusfs_set_ksu_sid();
@@ -213,8 +214,12 @@ if 'susfs_set_zygote_sid();' not in s:
 #endif
 
 '''
+    anchor = '\tmutex_unlock(&ksu_rules);\n'
     if anchor not in s:
-        raise SystemExit('selinux rules: rcu_read_unlock anchor missing')
+        # Compatibility fallback for older SUSFS/KSU trees.
+        anchor = '\trcu_read_unlock();\n'
+    if anchor not in s:
+        raise SystemExit('selinux rules: policy unlock anchor missing')
     s = s.replace(anchor, block + anchor, 1)
 p.write_text(s)
 
