@@ -1,0 +1,162 @@
+name: riwutz_josjiz Watermelon 4.14.355 Universal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/riwutz-josjiz-watermelon-414355-universal.yml'
+      - 'scripts/cahazzu_manual_hooks.py'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      KERNEL_REPO: https://github.com/xradens/msm-4.14.git
+      KERNEL_COMMIT: 95dffb0397b21a8a54fefec47801ab460be5532f
+      KSU_REPO: https://github.com/KernelSU-Next/KernelSU-Next.git
+      KSU_COMMIT: 0d6bdc6364cbfc73517dcfdf7ab23b0ba8045553
+      SUSFS_REPO: https://github.com/yatendra1999/susfs4ksu.git
+      SUSFS_COMMIT: 96750ec8cb280c22534875ebaaad360cefdec77b
+      ZIP_NAME: riwutz_josjiz.zip
+
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison build-essential ca-certificates cpio curl device-tree-compiler file flex git libelf-dev libssl-dev make patch python3 python-is-python3 rsync unzip xz-utils zip zstd
+
+      - name: Fetch exact Watermelon source and make A10/A11 trees
+        run: |
+          set -euxo pipefail
+          git init kernel-base
+          git -C kernel-base remote add origin "$KERNEL_REPO"
+          git -C kernel-base fetch --depth=1 origin "$KERNEL_COMMIT"
+          git -C kernel-base checkout --detach FETCH_HEAD
+          test "$(git -C kernel-base rev-parse HEAD)" = "$KERNEL_COMMIT"
+          grep -Fx 'VERSION = 4' kernel-base/Makefile
+          grep -Fx 'PATCHLEVEL = 14' kernel-base/Makefile
+          grep -Fx 'SUBLEVEL = 355' kernel-base/Makefile
+          cp -a kernel-base kernel-a10
+          cp -a kernel-base kernel-a11
+
+      - name: Fetch exact KSU Next v1.1.1 and SUSFS v1.5.4
+        run: |
+          set -euxo pipefail
+          git clone "$KSU_REPO" ksu-src
+          git -C ksu-src checkout --detach "$KSU_COMMIT"
+          test "$(git -C ksu-src describe --tags --exact-match)" = 'v1.1.1'
+          KSU_COUNT="$(git -C ksu-src rev-list --count HEAD)"
+          KSU_VERSION="$((10000 + KSU_COUNT + 200))"
+          echo "KSU_COUNT=$KSU_COUNT KSU_VERSION=$KSU_VERSION"
+          test "$KSU_VERSION" = '12851'
+          git clone "$SUSFS_REPO" susfs
+          git -C susfs checkout --detach "$SUSFS_COMMIT"
+          grep -q 'SUSFS_VERSION "v1.5.4"' susfs/kernel_patches/include/linux/susfs.h
+
+      - name: Patch A10 and A11-A12 trees
+        run: |
+          set -euxo pipefail
+          for tree in kernel-a10 kernel-a11; do
+            rm -rf "$tree/KernelSU-Next" "$tree/drivers/kernelsu"
+            cp -a ksu-src "$tree/KernelSU-Next"
+            ln -s ../KernelSU-Next/kernel "$tree/drivers/kernelsu"
+
+            cp susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch "$tree/KernelSU-Next/"
+            (cd "$tree/KernelSU-Next" && patch -p1 --forward < 10_enable_susfs_for_ksu.patch)
+            cp -a susfs/kernel_patches/fs/. "$tree/fs/"
+            cp -a susfs/kernel_patches/include/. "$tree/include/"
+            (cd "$tree" && patch -p1 --forward < ../susfs/kernel_patches/50_add_susfs_in_kernel-4.14.patch)
+
+            python3 scripts/cahazzu_manual_hooks.py --help >/dev/null 2>&1 || true
+            (cd "$tree" && python3 "$GITHUB_WORKSPACE/scripts/cahazzu_manual_hooks.py")
+
+            python3 - "$tree" <<'PY'
+          import sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          p=root/'drivers/staging/qcacld-3.0/Kbuild'
+          s=p.read_text()
+          block='ifneq ($(CONFIG_IRQ_SBALANCE), y)\ncppflags-y += -DHIF_IRQ_AFFINITY\nendif\n'
+          if block not in s:
+              raise SystemExit(f'Wi-Fi HIF_IRQ_AFFINITY block not found in {p}')
+          p.write_text(s.replace(block,'',1))
+          PY
+
+            sed -i 's/^EXTRAVERSION = .*/EXTRAVERSION =/' "$tree/Makefile"
+            sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="-riwutz_josjiz"/' "$tree/arch/arm64/configs/surya_defconfig"
+            sed -i 's/^CONFIG_LOCALVERSION_AUTO=y/# CONFIG_LOCALVERSION_AUTO is not set/' "$tree/arch/arm64/configs/surya_defconfig"
+            printf '\nCONFIG_KSU=y\n# CONFIG_KSU_KPROBES_HOOK is not set\nCONFIG_KSU_SUSFS=y\nCONFIG_KSU_SUSFS_SUS_PATH=y\nCONFIG_KSU_SUSFS_SUS_MOUNT=y\nCONFIG_KSU_SUSFS_SUS_KSTAT=y\nCONFIG_KSU_SUSFS_TRY_UMOUNT=y\nCONFIG_KSU_SUSFS_SPOOF_UNAME=y\nCONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y\nCONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$tree/arch/arm64/configs/surya_defconfig"
+          done
+
+          sed -i '/^CONFIG_UCLAMP_TASK=/d;/^CONFIG_UCLAMP_BUCKETS_COUNT=/d;/^CONFIG_UCLAMP_TASK_GROUP=/d' kernel-a10/arch/arm64/configs/surya_defconfig
+          sed -i 's/^# CONFIG_SCHED_TUNE is not set/CONFIG_SCHED_TUNE=y/' kernel-a10/arch/arm64/configs/surya_defconfig
+
+      - name: Build Android 10 payload
+        working-directory: kernel-a10
+        run: |
+          set -euxo pipefail
+          export KBUILD_BUILD_USER=nobody KBUILD_BUILD_HOST=android-build
+          bash build.sh --clean --su
+          test -s out/arch/arm64/boot/Image.gz
+          test -s out/arch/arm64/boot/dtb.img
+          test -s out/arch/arm64/boot/dtbo.img
+          mkdir -p "$GITHUB_WORKSPACE/payload/a10"
+          cp out/arch/arm64/boot/{Image.gz,dtb.img,dtbo.img} "$GITHUB_WORKSPACE/payload/a10/"
+          strings out/arch/arm64/boot/Image.gz 2>/dev/null | grep -m1 riwutz_josjiz || true
+
+      - name: Build Android 11-12 payload
+        working-directory: kernel-a11
+        run: |
+          set -euxo pipefail
+          export KBUILD_BUILD_USER=nobody KBUILD_BUILD_HOST=android-build
+          bash build.sh --clean --su
+          test -s out/arch/arm64/boot/Image.gz
+          test -s out/arch/arm64/boot/dtb.img
+          test -s out/arch/arm64/boot/dtbo.img
+          mkdir -p "$GITHUB_WORKSPACE/payload/a11"
+          cp out/arch/arm64/boot/{Image.gz,dtb.img,dtbo.img} "$GITHUB_WORKSPACE/payload/a11/"
+
+      - name: Package one autodetect A10-A12 ZIP
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 -b watermelon https://github.com/xradens/AnyKernel3.git ak3
+          rm -rf ak3/.git ak3/Image.gz ak3/dtb.img ak3/dtbo.img
+          mkdir -p ak3/payload/a10 ak3/payload/a11
+          cp payload/a10/* ak3/payload/a10/
+          cp payload/a11/* ak3/payload/a11/
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('ak3/anykernel.sh')
+          s=p.read_text()
+          s=s.replace('kernel.string=OSS Kernel | POCO X3/NFC','kernel.string=riwutz_josjiz')
+          s=s.replace('supported.versions=11-16','supported.versions=10-12')
+          needle='. tools/ak3-core.sh;\n\n# boot install\n'
+          insert='''. tools/ak3-core.sh;\n\n# riwutz_josjiz A10/A11-A12 autodetect\nANDROID_VER=$(getprop ro.build.version.release 2>/dev/null | cut -d. -f1);\ncase "$ANDROID_VER" in\n  10) PAYLOAD=a10;;\n  11|12) PAYLOAD=a11;;\n  *) abort "Unsupported Android version: $ANDROID_VER";;\nesac;\nui_print "riwutz_josjiz: Android $ANDROID_VER -> $PAYLOAD";\ncp -f "$AKHOME/payload/$PAYLOAD/Image.gz" "$AKHOME/Image.gz";\ncp -f "$AKHOME/payload/$PAYLOAD/dtb.img" "$AKHOME/dtb.img";\ncp -f "$AKHOME/payload/$PAYLOAD/dtbo.img" "$AKHOME/dtbo.img";\n\n# boot install\n'''
+          if needle not in s:
+              raise SystemExit('AnyKernel install anchor not found')
+          p.write_text(s.replace(needle,insert,1))
+          PY
+          (cd ak3 && zip -r9 "../$ZIP_NAME" . -x '*.git*' 'README.md')
+          unzip -l "$ZIP_NAME" | tee zip-list.txt
+          test "$(unzip -l "$ZIP_NAME" | grep -c 'payload/a10/Image.gz')" -eq 1
+          test "$(unzip -l "$ZIP_NAME" | grep -c 'payload/a11/Image.gz')" -eq 1
+          sha256sum "$ZIP_NAME" | tee "$ZIP_NAME.sha256"
+
+      - name: Upload final riwutz_josjiz
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz-final
+          path: |
+            riwutz_josjiz.zip
+            riwutz_josjiz.zip.sha256
+            clang-version.txt
+          if-no-files-found: error
