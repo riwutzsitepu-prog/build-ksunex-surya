@@ -1,0 +1,152 @@
+name: riwutz_josjiz A10 BOOTFIX4 EXACTBASE
+
+on:
+  push:
+    branches:
+      - riwutz-a10-bootfix2
+    paths:
+      - '.github/workflows/riwutz-josjiz-a10-bootfix4-exactbase.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex git libelf-dev libssl-dev python3 unzip xz-utils zip
+
+      - name: Checkout exact donor Watermelon 4.14.355 base
+        run: |
+          rm -rf kernel
+          git init kernel
+          git -C kernel remote add origin https://github.com/xradens/msm-4.14.git
+          git -C kernel fetch --depth=1 origin 95dffb0397b21a8a54fefec47801ab460be5532f
+          git -C kernel checkout --detach FETCH_HEAD
+          test "$(git -C kernel rev-parse HEAD)" = "95dffb0397b21a8a54fefec47801ab460be5532f"
+          grep -q '^SUBLEVEL = 355$' kernel/Makefile
+          printf '%s\n' "$(git -C kernel rev-parse HEAD)" | tee exact-base.txt
+
+      - name: Backport only Android 10 scheduler revert and SchedTune defconfig
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          git config user.name riwutz
+          git config user.email riwutz@cahazzu.local
+          git fetch --depth=2 origin 055b48f3fb1c6d0651bf4e84fdd296cddd051299
+
+          set +e
+          git cherry-pick 7acba8aadf95dea99ac20523799dbe4373a81391 > ../cherry-pick-scheduler.log 2>&1
+          RC1=$?
+          if [ "$RC1" -ne 0 ]; then
+            git status --short | tee ../cherry-pick-status.txt
+            git diff --name-only --diff-filter=U | tee ../conflict-files.txt
+            git diff > ../cherry-pick-conflict.diff
+            cat ../cherry-pick-scheduler.log
+            exit "$RC1"
+          fi
+
+          git cherry-pick 055b48f3fb1c6d0651bf4e84fdd296cddd051299 > ../cherry-pick-defconfig.log 2>&1
+          RC2=$?
+          if [ "$RC2" -ne 0 ]; then
+            git status --short | tee ../cherry-pick-status.txt
+            git diff --name-only --diff-filter=U | tee ../conflict-files.txt
+            git diff > ../cherry-pick-conflict.diff
+            cat ../cherry-pick-defconfig.log
+            exit "$RC2"
+          fi
+          set -e
+
+          git log -3 --oneline | tee ../bootfix4-gitlog.txt
+          grep -q '^CONFIG_SCHED_TUNE=y$' arch/arm64/configs/surya_defconfig
+          ! grep -q '^CONFIG_UCLAMP_TASK=y$' arch/arm64/configs/surya_defconfig
+          ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' arch/arm64/configs/surya_defconfig
+
+      - name: Prepare ClangBuiltLinux LLVM 20.1.0
+        run: |
+          rm -rf tc llvm-20.1.0-x86_64.tar.xz
+          mkdir -p tc/llvm-20.1.0
+          curl -L --fail --retry 3 \
+            https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.0-x86_64.tar.xz \
+            -o llvm-20.1.0-x86_64.tar.xz
+          test "$(stat -c%s llvm-20.1.0-x86_64.tar.xz)" = "129714604"
+          sha256sum llvm-20.1.0-x86_64.tar.xz | tee llvm-20.1.0.sha256
+          tar -xJf llvm-20.1.0-x86_64.tar.xz -C tc/llvm-20.1.0 --strip-components=1
+          tc/llvm-20.1.0/bin/clang --version | tee clang-version.txt
+          tc/llvm-20.1.0/bin/clang --version | grep -q 'clang version 20.1.0'
+          echo "$GITHUB_WORKSPACE/tc/llvm-20.1.0/bin" >> "$GITHUB_PATH"
+
+      - name: Configure exact-base Android 10 SchedTune with built-in KSU
+        working-directory: kernel
+        run: |
+          rm -rf out
+          make O=out LLVM=1 surya_defconfig
+          scripts/config --file out/.config --enable KSU
+          scripts/config --file out/.config --enable SCHED_TUNE
+          scripts/config --file out/.config --disable UCLAMP_TASK
+          scripts/config --file out/.config --disable UCLAMP_TASK_GROUP
+          scripts/config --file out/.config --disable UCLAMP_BUCKETS_COUNT
+          scripts/config --file out/.config --set-str LOCALVERSION "-riwutz_josjiz"
+          scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          make O=out LLVM=1 olddefconfig
+
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_SCHED_TUNE=y$' out/.config
+          ! grep -q '^CONFIG_UCLAMP_TASK=y$' out/.config
+          ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' out/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' out/.config
+          cp out/.config ../a10-bootfix4.config
+
+      - name: Build A10 BOOTFIX4 exact-base Image
+        working-directory: kernel
+        env:
+          KBUILD_BUILD_USER: riwutz
+          KBUILD_BUILD_HOST: cahazzu
+        run: |
+          set -o pipefail
+          make O=out -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee ../a10-bootfix4-build.log
+          test -s out/arch/arm64/boot/Image.gz
+          cp out/arch/arm64/boot/Image.gz ../Image.gz
+
+          KERNEL_RELEASE="$(make -s O=out LLVM=1 kernelrelease)"
+          printf '%s\n' "$KERNEL_RELEASE" | tee ../kernel-version.txt
+          test "$KERNEL_RELEASE" = "4.14.355-riwutz_josjiz"
+
+          gzip -dc out/arch/arm64/boot/Image.gz > ../Image.bootfix4.raw
+          strings ../Image.bootfix4.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee ../embedded-version.txt
+          grep -q 'clang version 20.1.0' ../embedded-version.txt
+          strings ../Image.bootfix4.raw | grep -m3 -E 'KernelSU|KSU_VERSION' > ../ksu-strings.txt || true
+          rm -f ../Image.bootfix4.raw
+          sha256sum ../Image.gz | tee ../Image.gz.sha256
+
+      - name: Upload BOOTFIX4 Image and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz-BOOTFIX4-EXACTBASE-A10
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            Image.gz
+            Image.gz.sha256
+            exact-base.txt
+            bootfix4-gitlog.txt
+            a10-bootfix4.config
+            a10-bootfix4-build.log
+            clang-version.txt
+            llvm-20.1.0.sha256
+            kernel-version.txt
+            embedded-version.txt
+            ksu-strings.txt
+            cherry-pick-scheduler.log
+            cherry-pick-defconfig.log
+            cherry-pick-status.txt
+            conflict-files.txt
+            cherry-pick-conflict.diff
