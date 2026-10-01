@@ -60,7 +60,21 @@ if 'susfs_spoof_uname(&tmp);' not in s:
     s = s.replace(anchor, block, 1)
 p.write_text(s)
 
-# Strong semantic checks for all four adaptations.
+# kernel/sched/fair.c: Android 10 disables UCLAMP_TASK, so its fallback calls
+# boosted_task_util() before Watermelon defines it later in the same file.
+# Add only a forward declaration; this does not change scheduler behaviour.
+p = base / 'kernel/sched/fair.c'
+s = p.read_text()
+prototype = 'static inline unsigned long boosted_task_util(struct task_struct *task);\n\n'
+anchor = '#ifdef CONFIG_UCLAMP_TASK\nstatic inline unsigned long uclamp_task_util(struct task_struct *p)\n'
+pos = s.find(anchor)
+if pos < 0:
+    raise SystemExit('fair.c: uclamp_task_util anchor missing')
+if prototype not in s[:pos + len(anchor)]:
+    s = s[:pos] + prototype + s[pos:]
+p.write_text(s)
+
+# Strong semantic checks for all adaptations.
 checks = {
     base / 'fs/dcache.c': [
         '#include <linux/susfs_def.h>',
@@ -80,6 +94,10 @@ checks = {
         'susfs_spoof_uname(&tmp);',
         'bpfloader',
         'netd',
+    ],
+    base / 'kernel/sched/fair.c': [
+        'static inline unsigned long boosted_task_util(struct task_struct *task);',
+        'static inline unsigned long uclamp_task_util(struct task_struct *p)',
     ],
 }
 for fn, tokens in checks.items():
