@@ -41,11 +41,15 @@ jobs:
           grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) =' Makefile | head -n 4
           test "$(awk '/^SUBLEVEL =/{print $3}' Makefile)" = "355"
 
-      - name: Prepare developer clang 20
+      - name: Prepare available clang 20
         run: |
           rm -rf tc
-          mkdir -p tc
-          git clone --depth=1 -b 20 https://bitbucket.org/rdxzv/clang-standalone.git tc/clang-20
+          mkdir -p tc/clang-20
+          curl -L --fail --retry 3 \
+            https://github.com/greenforce-project/greenforce_clang/releases/download/24072024/greenforce-clang-20.0.0git-24072024.tar.zst \
+            -o clang20.tar.zst
+          echo '1bdea29ba34c13b672803d3ef26adbb955a33cb79cd4b6c8a6e01f545b61da52c  clang20.tar.zst' | sha256sum -c -
+          tar --zstd -xf clang20.tar.zst -C tc/clang-20
           echo "$GITHUB_WORKSPACE/tc/clang-20/bin" >> "$GITHUB_PATH"
           tc/clang-20/bin/clang --version | tee clang-version.txt
 
