@@ -67,11 +67,22 @@ jobs:
                   raise SystemExit(f'LZ4 export anchor not found: {old}')
               s = s.replace(old, new, 1)
           p.write_text(s)
+
+          p = Path('drivers/soc/qcom/msm_bus/msm_bus_dbg_rpmh.c')
+          s = p.read_text()
+          old = '#include <trace/events/trace_msm_bus.h>'
+          new = '#define CREATE_TRACE_POINTS\n#include <trace/events/trace_msm_bus.h>'
+          if old not in s:
+              raise SystemExit('msm bus trace header anchor not found')
+          if '#define CREATE_TRACE_POINTS' not in s:
+              s = s.replace(old, new, 1)
+          p.write_text(s)
           PY
           grep -n 'boosted_task_util(struct task_struct \*task);' kernel/sched/fair.c
           grep -n '^static struct request \*__dd_dispatch_request(struct deadline_data \*dd)' block/mq-deadline.c
           grep -n 'EXPORT_SYMBOL(LZ4_arm64_decompress_safe' lib/lz4/lz4_decompress.c
           ! grep -q 'EXPORT_SYMBOL(LZ4_armv8_decompress_safe' lib/lz4/lz4_decompress.c
+          grep -n '#define CREATE_TRACE_POINTS' drivers/soc/qcom/msm_bus/msm_bus_dbg_rpmh.c
 
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
         run: |
