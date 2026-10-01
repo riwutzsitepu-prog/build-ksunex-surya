@@ -55,9 +55,23 @@ jobs:
           if bad in s:
               raise SystemExit('mq-deadline duplicate dd still present in __dd_dispatch_request')
           p.write_text(s)
+
+          p = Path('lib/lz4/lz4_decompress.c')
+          s = p.read_text()
+          replacements = {
+              'EXPORT_SYMBOL(LZ4_armv8_decompress_safe);': 'EXPORT_SYMBOL(LZ4_arm64_decompress_safe);',
+              'EXPORT_SYMBOL(LZ4_armv8_decompress_safe_partial);': 'EXPORT_SYMBOL(LZ4_arm64_decompress_safe_partial);',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'LZ4 export anchor not found: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
           PY
           grep -n 'boosted_task_util(struct task_struct \*task);' kernel/sched/fair.c
           grep -n '^static struct request \*__dd_dispatch_request(struct deadline_data \*dd)' block/mq-deadline.c
+          grep -n 'EXPORT_SYMBOL(LZ4_arm64_decompress_safe' lib/lz4/lz4_decompress.c
+          ! grep -q 'EXPORT_SYMBOL(LZ4_armv8_decompress_safe' lib/lz4/lz4_decompress.c
 
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
         run: |
