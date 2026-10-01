@@ -115,8 +115,12 @@ jobs:
           print('delta lines applied:', len(applied))
           PY
 
-          # Diagnostic boot baseline: keep KernelSU disabled until 4.14.355 itself boots.
+          # Diagnostic boot baseline: keep KernelSU and incompatible SMACK disabled until 4.14.355 itself boots.
           scripts/config --file out6/.config --disable KSU
+          scripts/config --file out6/.config --disable SECURITY_SMACK
+          scripts/config --file out6/.config --disable SECURITY_SMACK_BRINGUP
+          scripts/config --file out6/.config --disable SECURITY_SMACK_NETFILTER
+          scripts/config --file out6/.config --disable SECURITY_SMACK_APPEND_SIGNALS
           scripts/config --file out6/.config --set-str LOCALVERSION "-riwutz_josjiz"
           scripts/config --file out6/.config --disable LOCALVERSION_AUTO
           make O=out6 LLVM=1 olddefconfig
@@ -144,10 +148,11 @@ jobs:
           PY
 
           {
-            grep -E '^(CONFIG_(MEMCG|MODULES|SCHED_WALT|SCHED_CORE_CTL|SCHED_TUNE|FAIR_GROUP_SCHED|PSTORE|PCI_MSM|MSM_GCC_SM6150|MSM_DISPCC_SM6150|MSM_GPUCC_SM6150|PINCTRL_SM6150|SCSI_UFS_QCOM_ICE|MMC_SDHCI_MSM_ICE|BUILD_ARM64_APPENDED_DTB_IMAGE|IMG_GZ_DTB)=|# CONFIG_(KSU|UCLAMP_TASK|UCLAMP_TASK_GROUP) is not set)' out6/.config || true
+            grep -E '^(CONFIG_(MEMCG|MODULES|SCHED_WALT|SCHED_CORE_CTL|SCHED_TUNE|FAIR_GROUP_SCHED|PSTORE|PCI_MSM|MSM_GCC_SM6150|MSM_DISPCC_SM6150|MSM_GPUCC_SM6150|PINCTRL_SM6150|SCSI_UFS_QCOM_ICE|MMC_SDHCI_MSM_ICE|BUILD_ARM64_APPENDED_DTB_IMAGE|IMG_GZ_DTB)=|# CONFIG_(KSU|SECURITY_SMACK|UCLAMP_TASK|UCLAMP_TASK_GROUP) is not set)' out6/.config || true
           } | tee ../bootfix6-key-config.txt
 
           grep -q '^# CONFIG_KSU is not set$' out6/.config
+          grep -q '^# CONFIG_SECURITY_SMACK is not set$' out6/.config
           grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out6/.config
 
       - name: Build BOOTFIX6 4.14.355 Image
