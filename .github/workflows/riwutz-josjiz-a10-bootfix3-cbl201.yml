@@ -33,6 +33,21 @@ jobs:
           grep -q '^SUBLEVEL = 355$' kernel/Makefile
           git -C kernel rev-parse HEAD | tee exact-base.txt
 
+      - name: Add Android 10 boosted_task_util forward declaration
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('kernel/sched/fair.c')
+          s = p.read_text()
+          old = "return max(task_util(p), _task_util_est(p));\n}\n\n#ifdef CONFIG_UCLAMP_TASK\n"
+          new = "return max(task_util(p), _task_util_est(p));\n}\n\nstatic inline unsigned long boosted_task_util(struct task_struct *task);\n\n#ifdef CONFIG_UCLAMP_TASK\n"
+          if old not in s:
+              raise SystemExit('boosted_task_util declaration anchor not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          grep -n 'static inline unsigned long boosted_task_util(struct task_struct \*task);' kernel/sched/fair.c
+
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
         run: |
           rm -rf tc llvm-20.1.0-x86_64.tar.xz
