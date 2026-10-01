@@ -1,0 +1,135 @@
+name: riwutz_josjiz A10 BOOTFIX2
+
+on:
+  push:
+    branches:
+      - riwutz-a10-bootfix2
+    paths:
+      - '.github/workflows/riwutz-josjiz-a10-bootfix2.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex git libelf-dev libssl-dev python3 unzip zip zstd
+
+      - name: Checkout Q-SchedTune Watermelon source
+        run: |
+          rm -rf kernel
+          git init kernel
+          git -C kernel remote add origin https://github.com/xradens/msm-4.14.git
+          git -C kernel fetch --depth=1 origin 055b48f3fb1c6d0651bf4e84fdd296cddd051299
+          git -C kernel checkout --detach FETCH_HEAD
+          test "$(git -C kernel rev-parse HEAD)" = "055b48f3fb1c6d0651bf4e84fdd296cddd051299"
+          grep -q '^CONFIG_SCHED_TUNE=y$' kernel/arch/arm64/configs/surya_defconfig
+          ! grep -q '^CONFIG_UCLAMP_TASK=y$' kernel/arch/arm64/configs/surya_defconfig
+
+      - name: Force 4.14.355 riwutz_josjiz identity
+        working-directory: kernel
+        run: |
+          sed -i 's/^SUBLEVEL = .*/SUBLEVEL = 355/' Makefile
+          sed -i 's/^EXTRAVERSION = .*/EXTRAVERSION =/' Makefile
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) =' Makefile | head -n 4
+          test "$(awk '/^SUBLEVEL =/{print $3}' Makefile)" = "355"
+
+      - name: Prepare developer clang 20
+        run: |
+          rm -rf tc
+          mkdir -p tc
+          git clone --depth=1 -b 20 https://bitbucket.org/rdxzv/clang-standalone.git tc/clang-20
+          echo "$GITHUB_WORKSPACE/tc/clang-20/bin" >> "$GITHUB_PATH"
+          tc/clang-20/bin/clang --version | tee clang-version.txt
+
+      - name: Configure Android 10 SchedTune with built-in KSU
+        working-directory: kernel
+        run: |
+          rm -rf out
+          make O=out LLVM=1 surya_defconfig
+          scripts/config --file out/.config --enable KSU
+          scripts/config --file out/.config --enable SCHED_TUNE
+          scripts/config --file out/.config --disable UCLAMP_TASK
+          scripts/config --file out/.config --disable UCLAMP_TASK_GROUP
+          scripts/config --file out/.config --disable UCLAMP_BUCKETS_COUNT
+          scripts/config --file out/.config --set-str LOCALVERSION "-riwutz_josjiz"
+          scripts/config --file out/.config --disable LOCALVERSION_AUTO
+          make O=out LLVM=1 olddefconfig
+
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_SCHED_TUNE=y$' out/.config
+          ! grep -q '^CONFIG_UCLAMP_TASK=y$' out/.config
+          ! grep -q '^CONFIG_UCLAMP_TASK_GROUP=y$' out/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out/.config
+          grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' out/.config
+          cp out/.config ../a10-bootfix2.config
+
+      - name: Build A10 BOOTFIX2 kernel
+        working-directory: kernel
+        env:
+          KBUILD_BUILD_USER: riwutz
+          KBUILD_BUILD_HOST: cahazzu
+        run: |
+          set -o pipefail
+          make O=out -j"$(nproc)" LLVM=1 Image.gz dtb.img dtbo.img 2>&1 | tee ../a10-bootfix2-build.log
+          test -s out/arch/arm64/boot/Image.gz
+          test -s out/arch/arm64/boot/dtb.img
+          test -s out/arch/arm64/boot/dtbo.img
+
+          gzip -dc out/arch/arm64/boot/Image.gz > ../Image.bootfix2.raw
+          strings ../Image.bootfix2.raw | grep -m1 'Linux version' | tee ../kernel-version.txt
+          grep -q '4.14.355-riwutz_josjiz' ../kernel-version.txt
+          strings ../Image.bootfix2.raw | grep -m3 -E 'KernelSU|KSU_VERSION' > ../ksu-strings.txt || true
+          rm -f ../Image.bootfix2.raw
+
+      - name: Package A10 BOOTFIX2 AnyKernel ZIP
+        run: |
+          rm -rf ak3
+          git clone --depth=1 -b watermelon https://github.com/xradens/AnyKernel3.git ak3
+          cp kernel/out/arch/arm64/boot/Image.gz ak3/Image.gz
+          cp kernel/out/arch/arm64/boot/dtb.img ak3/dtb.img
+          cp kernel/out/arch/arm64/boot/dtbo.img ak3/dtbo.img
+
+          sed -i -E 's/^kernel\.string=.*/kernel.string=riwutz_josjiz/' ak3/anykernel.sh
+          if grep -q '^supported\.versions=' ak3/anykernel.sh; then
+            sed -i -E 's/^supported\.versions=.*/supported.versions=10/' ak3/anykernel.sh
+          fi
+
+          cat > ak3/BOOTFIX2_INFO.txt <<'EOF'
+          riwutz_josjiz A10 BOOTFIX2
+          Target: Poco X3 NFC surya/karna Android 10
+          Kernel identity: 4.14.355-riwutz_josjiz
+          Scheduler base: xradens commit 055b48f (full UClamp revert + SchedTune)
+          Root: built-in source KernelSU only
+          SUSFS: intentionally disabled for boot isolation
+          Wi-Fi patch: intentionally disabled for boot isolation
+          EOF
+
+          rm -rf ak3/.git
+          (cd ak3 && zip -r9 ../riwutz_josjiz_BOOTFIX2_A10.zip . -x '*.git*')
+          unzip -t riwutz_josjiz_BOOTFIX2_A10.zip | tee zip-test.txt
+          sha256sum riwutz_josjiz_BOOTFIX2_A10.zip | tee riwutz_josjiz_BOOTFIX2_A10.zip.sha256
+
+      - name: Upload BOOTFIX2 package and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz-BOOTFIX2-A10
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            riwutz_josjiz_BOOTFIX2_A10.zip
+            riwutz_josjiz_BOOTFIX2_A10.zip.sha256
+            a10-bootfix2.config
+            a10-bootfix2-build.log
+            clang-version.txt
+            kernel-version.txt
+            ksu-strings.txt
+            zip-test.txt
