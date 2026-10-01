@@ -87,11 +87,15 @@ jobs:
           test -s out/arch/arm64/boot/dtb.img
           test -s out/arch/arm64/boot/dtbo.img
 
+          KERNEL_RELEASE="$(make -s O=out LLVM=1 kernelrelease)"
+          printf '%s\n' "$KERNEL_RELEASE" | tee ../kernel-version.txt
+          test "$KERNEL_RELEASE" = "4.14.355-riwutz_josjiz"
+
           gzip -dc out/arch/arm64/boot/Image.gz > ../Image.bootfix2.raw
-          strings ../Image.bootfix2.raw | grep -m1 'Linux version' | tee ../kernel-version.txt
-          grep -q '4.14.355-riwutz_josjiz' ../kernel-version.txt
-          strings ../Image.bootfix2.raw | grep -m3 -E 'KernelSU|KSU_VERSION' > ../ksu-strings.txt || true
-          rm -f ../Image.bootfix2.raw
+          strings ../Image.bootfix2.raw > ../Image.bootfix2.strings
+          grep -Fq '4.14.355-riwutz_josjiz' ../Image.bootfix2.strings
+          grep -m3 -E 'KernelSU|KSU_VERSION' ../Image.bootfix2.strings > ../ksu-strings.txt || true
+          rm -f ../Image.bootfix2.raw ../Image.bootfix2.strings
 
       - name: Package A10 BOOTFIX2 AnyKernel ZIP
         run: |
