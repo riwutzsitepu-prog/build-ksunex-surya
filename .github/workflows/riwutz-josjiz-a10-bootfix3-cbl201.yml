@@ -2,8 +2,7 @@ name: riwutz_josjiz A10 BOOTFIX6 REFCONFIG 4.14.355
 
 on:
   push:
-    branches:
-      - riwutz-a10-bootfix2
+    branches: [riwutz-a10-bootfix2]
     paths:
       - '.github/workflows/riwutz-josjiz-a10-bootfix3-cbl201.yml'
       - '.github/configs/wih-riwut-a10-delta-fixed.config.gz.b64'
@@ -13,7 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 90
-
     steps:
       - name: Checkout builder
         uses: actions/checkout@v4
@@ -34,7 +32,7 @@ jobs:
           grep -q '^SUBLEVEL = 355$' kernel/Makefile
           git -C kernel rev-parse HEAD | tee exact-base.txt
 
-      - name: Add Android 10 boosted_task_util forward declaration
+      - name: Apply minimal Android 10 source compatibility fixes
         working-directory: kernel
         run: |
           python3 - <<'PY'
@@ -46,16 +44,23 @@ jobs:
           if old not in s:
               raise SystemExit('boosted_task_util declaration anchor not found')
           p.write_text(s.replace(old, new, 1))
+
+          p = Path('block/mq-deadline.c')
+          s = p.read_text()
+          bad = "static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n\tstruct deadline_data *dd = hctx->queue->elevator->elevator_data;\n"
+          good = "static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n"
+          if bad not in s:
+              raise SystemExit('mq-deadline duplicate dd anchor not found')
+          p.write_text(s.replace(bad, good, 1))
           PY
-          grep -n 'static inline unsigned long boosted_task_util(struct task_struct \*task);' kernel/sched/fair.c
+          grep -n 'boosted_task_util(struct task_struct \*task);' kernel/sched/fair.c
+          ! grep -q 'struct deadline_data \*dd = hctx->queue->elevator->elevator_data;' block/mq-deadline.c
 
       - name: Prepare ClangBuiltLinux LLVM 20.1.0
         run: |
           rm -rf tc llvm-20.1.0-x86_64.tar.xz
           mkdir -p tc/llvm-20.1.0
-          curl -L --fail --retry 3 \
-            https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.0-x86_64.tar.xz \
-            -o llvm-20.1.0-x86_64.tar.xz
+          curl -L --fail --retry 3 https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.0-x86_64.tar.xz -o llvm-20.1.0-x86_64.tar.xz
           test "$(stat -c%s llvm-20.1.0-x86_64.tar.xz)" = "129714604"
           sha256sum llvm-20.1.0-x86_64.tar.xz | tee llvm-20.1.0.sha256
           tar -xJf llvm-20.1.0-x86_64.tar.xz -C tc/llvm-20.1.0 --strip-components=1
@@ -68,89 +73,57 @@ jobs:
         run: |
           rm -rf out6
           make O=out6 LLVM=1 surya_defconfig
-
           set +e
           base64 -d "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta-fixed.config.gz.b64" | gzip -dc > ../wih-riwut-a10-delta.config
           gzip_rc=$?
           set -e
           test -s ../wih-riwut-a10-delta.config
           echo '1692159dfb98bb4889e5bd9e2ffb07ee604936eeb30f37420e4cda4286d25105  ../wih-riwut-a10-delta.config' | sha256sum -c -
-          if [ "$gzip_rc" -ne 0 ]; then
-            echo 'gzip footer CRC mismatch ignored: extracted A10 delta SHA256 is exact'
-          fi
-
+          if [ "$gzip_rc" -ne 0 ]; then echo 'gzip footer mismatch ignored; extracted delta hash is exact'; fi
           python3 - <<'PY'
           from pathlib import Path
-
-          cfg_path = Path('out6/.config')
-          delta_path = Path('../wih-riwut-a10-delta.config')
-          lines = cfg_path.read_text().splitlines()
-          pos = {}
-          for i, line in enumerate(lines):
-              if line.startswith('CONFIG_') and '=' in line:
-                  pos[line.split('=', 1)[0]] = i
-              elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
-                  pos[line.split()[1]] = i
-
-          applied = []
-          for line in delta_path.read_text().splitlines():
-              line = line.strip()
-              if not line:
-                  continue
-              if line.startswith('CONFIG_') and '=' in line:
-                  key = line.split('=', 1)[0]
-              elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
-                  key = line.split()[1]
-              else:
-                  continue
-              if key in pos:
-                  lines[pos[key]] = line
-              else:
-                  pos[key] = len(lines)
-                  lines.append(line)
+          cfg=Path('out6/.config'); delta=Path('../wih-riwut-a10-delta.config')
+          lines=cfg.read_text().splitlines(); pos={}
+          for i,line in enumerate(lines):
+              if line.startswith('CONFIG_') and '=' in line: pos[line.split('=',1)[0]]=i
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'): pos[line.split()[1]]=i
+          applied=[]
+          for line in delta.read_text().splitlines():
+              line=line.strip()
+              if not line: continue
+              if line.startswith('CONFIG_') and '=' in line: key=line.split('=',1)[0]
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'): key=line.split()[1]
+              else: continue
+              if key in pos: lines[pos[key]]=line
+              else: pos[key]=len(lines); lines.append(line)
               applied.append(line)
-
-          cfg_path.write_text('\n'.join(lines) + '\n')
-          Path('../delta-applied-before-olddefconfig.txt').write_text('\n'.join(applied) + '\n')
-          print('delta lines applied:', len(applied))
+          cfg.write_text('\n'.join(lines)+'\n')
+          Path('../delta-applied-before-olddefconfig.txt').write_text('\n'.join(applied)+'\n')
+          print('delta lines applied:',len(applied))
           PY
-
-          # Diagnostic boot baseline: keep KernelSU and incompatible SMACK disabled until 4.14.355 itself boots.
           scripts/config --file out6/.config --disable KSU
           scripts/config --file out6/.config --disable SECURITY_SMACK
           scripts/config --file out6/.config --disable SECURITY_SMACK_BRINGUP
           scripts/config --file out6/.config --disable SECURITY_SMACK_NETFILTER
           scripts/config --file out6/.config --disable SECURITY_SMACK_APPEND_SIGNALS
-          scripts/config --file out6/.config --set-str LOCALVERSION "-riwutz_josjiz"
+          scripts/config --file out6/.config --set-str LOCALVERSION '-riwutz_josjiz'
           scripts/config --file out6/.config --disable LOCALVERSION_AUTO
           make O=out6 LLVM=1 olddefconfig
-
           cp out6/.config ../bootfix6.config
-
           python3 - <<'PY'
           from pathlib import Path
           def parse(lines):
               d={}
               for line in lines:
-                  if line.startswith('CONFIG_') and '=' in line:
-                      d[line.split('=',1)[0]]=line
-                  elif line.startswith('# CONFIG_') and line.endswith(' is not set'):
-                      d[line.split()[1]]=line
+                  if line.startswith('CONFIG_') and '=' in line: d[line.split('=',1)[0]]=line
+                  elif line.startswith('# CONFIG_') and line.endswith(' is not set'): d[line.split()[1]]=line
               return d
-          req=parse(Path('../wih-riwut-a10-delta.config').read_text().splitlines())
-          fin=parse(Path('out6/.config').read_text().splitlines())
-          rejected=[]
-          for k,v in sorted(req.items()):
-              if fin.get(k) != v:
-                  rejected.append(f'{k}\n  requested: {v}\n  final:     {fin.get(k, "<absent>")}')
-          Path('../delta-rejected-after-olddefconfig.txt').write_text('\n'.join(rejected)+'\n')
-          print('delta mismatches after olddefconfig:', len(rejected))
+          req=parse(Path('../wih-riwut-a10-delta.config').read_text().splitlines()); fin=parse(Path('out6/.config').read_text().splitlines())
+          rej=[f'{k}\n  requested: {v}\n  final:     {fin.get(k,"<absent>")}' for k,v in sorted(req.items()) if fin.get(k)!=v]
+          Path('../delta-rejected-after-olddefconfig.txt').write_text('\n'.join(rej)+'\n')
+          print('delta mismatches after olddefconfig:',len(rej))
           PY
-
-          {
-            grep -E '^(CONFIG_(MEMCG|MODULES|SCHED_WALT|SCHED_CORE_CTL|SCHED_TUNE|FAIR_GROUP_SCHED|PSTORE|PCI_MSM|MSM_GCC_SM6150|MSM_DISPCC_SM6150|MSM_GPUCC_SM6150|PINCTRL_SM6150|SCSI_UFS_QCOM_ICE|MMC_SDHCI_MSM_ICE|BUILD_ARM64_APPENDED_DTB_IMAGE|IMG_GZ_DTB)=|# CONFIG_(KSU|SECURITY_SMACK|UCLAMP_TASK|UCLAMP_TASK_GROUP) is not set)' out6/.config || true
-          } | tee ../bootfix6-key-config.txt
-
+          grep -E '^(CONFIG_(MEMCG|MODULES|SCHED_WALT|SCHED_CORE_CTL|SCHED_TUNE|FAIR_GROUP_SCHED|PSTORE|PCI_MSM|MSM_GCC_SM6150|MSM_DISPCC_SM6150|MSM_GPUCC_SM6150|PINCTRL_SM6150|SCSI_UFS_QCOM_ICE|MMC_SDHCI_MSM_ICE|BUILD_ARM64_APPENDED_DTB_IMAGE|IMG_GZ_DTB)=|# CONFIG_(KSU|SECURITY_SMACK|UCLAMP_TASK|UCLAMP_TASK_GROUP) is not set)' out6/.config | tee ../bootfix6-key-config.txt || true
           grep -q '^# CONFIG_KSU is not set$' out6/.config
           grep -q '^# CONFIG_SECURITY_SMACK is not set$' out6/.config
           grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out6/.config
