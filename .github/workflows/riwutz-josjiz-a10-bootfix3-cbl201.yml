@@ -6,7 +6,7 @@ on:
       - riwutz-a10-bootfix2
     paths:
       - '.github/workflows/riwutz-josjiz-a10-bootfix3-cbl201.yml'
-      - '.github/configs/wih-riwut-a10-delta.config.gz.b64'
+      - '.github/configs/wih-riwut-a10-delta-fixed.config.gz.b64'
   workflow_dispatch:
 
 jobs:
@@ -70,7 +70,7 @@ jobs:
           make O=out6 LLVM=1 surya_defconfig
 
           set +e
-          base64 -d "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.config.gz.b64" | gzip -dc > ../wih-riwut-a10-delta.config
+          base64 -d "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta-fixed.config.gz.b64" | gzip -dc > ../wih-riwut-a10-delta.config
           gzip_rc=$?
           set -e
           test -s ../wih-riwut-a10-delta.config
