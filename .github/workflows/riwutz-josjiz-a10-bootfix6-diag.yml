@@ -54,27 +54,27 @@ jobs:
 
       - name: Configure BOOTFIX8 baseline
         run: |
-          rm -rf kernel/outfix8
-          make -C kernel O=outfix8 LLVM=1 surya_defconfig
-          python3 .github/scripts/bootfix7_diag_config.py "$GITHUB_WORKSPACE" kernel outfix8
-          kernel/scripts/config --file kernel/outfix8/.config --disable KSU
-          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK
-          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK_BRINGUP
-          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK_NETFILTER
-          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK_APPEND_SIGNALS
-          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE
-          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_CONSOLE
-          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_PMSG
-          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_RAM
-          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_LAST_KMSG
-          kernel/scripts/config --file kernel/outfix8/.config --set-str LOCALVERSION '-riwutz_josjiz'
-          kernel/scripts/config --file kernel/outfix8/.config --disable LOCALVERSION_AUTO
-          make -C kernel O=outfix8 LLVM=1 olddefconfig
-          cp kernel/outfix8/.config bootfix8-baseline.config
-          grep -q '^CONFIG_PSTORE_CONSOLE=y$' kernel/outfix8/.config
-          grep -q '^CONFIG_PSTORE_RAM=y$' kernel/outfix8/.config
-          grep -q '^# CONFIG_KSU is not set$' kernel/outfix8/.config
-          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' kernel/outfix8/.config
+          rm -rf kernel/outdiag
+          make -C kernel O=outdiag LLVM=1 surya_defconfig
+          python3 .github/scripts/bootfix7_diag_config.py "$GITHUB_WORKSPACE" kernel
+          kernel/scripts/config --file kernel/outdiag/.config --disable KSU
+          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK
+          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK_BRINGUP
+          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK_NETFILTER
+          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK_APPEND_SIGNALS
+          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE
+          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_CONSOLE
+          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_PMSG
+          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_RAM
+          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_LAST_KMSG
+          kernel/scripts/config --file kernel/outdiag/.config --set-str LOCALVERSION '-riwutz_josjiz'
+          kernel/scripts/config --file kernel/outdiag/.config --disable LOCALVERSION_AUTO
+          make -C kernel O=outdiag LLVM=1 olddefconfig
+          cp kernel/outdiag/.config bootfix8-baseline.config
+          grep -q '^CONFIG_PSTORE_CONSOLE=y$' kernel/outdiag/.config
+          grep -q '^CONFIG_PSTORE_RAM=y$' kernel/outdiag/.config
+          grep -q '^# CONFIG_KSU is not set$' kernel/outdiag/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' kernel/outdiag/.config
 
       - name: Build BOOTFIX8 baseline Image
         env:
@@ -82,9 +82,9 @@ jobs:
           KBUILD_BUILD_HOST: cahazzu
         run: |
           set -o pipefail
-          make -C kernel O=outfix8 -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee bootfix8-baseline-build.log
-          test -s kernel/outfix8/arch/arm64/boot/Image.gz
-          cp kernel/outfix8/arch/arm64/boot/Image.gz Image-BOOTFIX8.gz
+          make -C kernel O=outdiag -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee bootfix8-baseline-build.log
+          test -s kernel/outdiag/arch/arm64/boot/Image.gz
+          cp kernel/outdiag/arch/arm64/boot/Image.gz Image-BOOTFIX8.gz
           gzip -dc Image-BOOTFIX8.gz > Image-BOOTFIX8.raw
           strings Image-BOOTFIX8.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee bootfix8-version.txt
           strings Image-BOOTFIX8.raw | grep -F 'RIWUTZ_BOOTFIX8_QUSB_LEGACY10' | head -n1 | tee bootfix8-qusb-marker.txt
