@@ -1,4 +1,4 @@
-name: riwutz_josjiz A10 BOOTFIX8 QUSB LEGACY DIAG 4.14.355
+name: riwutz_josjiz A10 BOOTFIX8 QUSB LEGACY BASELINE 4.14.355
 
 on:
   push:
@@ -9,6 +9,7 @@ on:
       - '.github/scripts/bootfix7_diag_config.py'
       - '.github/scripts/fix_mq_deadline_diag.py'
       - '.github/scripts/bootfix8_qusb_legacy.py'
+      - '.github/scripts/strip_bootfix_diag_timer.py'
   workflow_dispatch:
 
 jobs:
@@ -32,11 +33,14 @@ jobs:
           test "$(git -C kernel rev-parse HEAD)" = "95dffb0397b21a8a54fefec47801ab460be5532f"
           grep -q '^SUBLEVEL = 355$' kernel/Makefile
 
-      - name: Apply BOOTFIX8 diagnostic patch set
+      - name: Apply BOOTFIX8 baseline patch set
         run: |
           python3 .github/scripts/bootfix7_diag_patch.py kernel
           python3 .github/scripts/fix_mq_deadline_diag.py kernel
           python3 .github/scripts/bootfix8_qusb_legacy.py kernel
+          python3 .github/scripts/strip_bootfix_diag_timer.py kernel
+          ! grep -q 'RIWUTZ_BOOTFIX7_DIAG_TIMEOUT_45S' kernel/init/main.c
+          grep -q 'RIWUTZ_BOOTFIX8_QUSB_LEGACY10' kernel/drivers/usb/phy/phy-msm-qusb-v2.c
 
       - name: Prepare ClangBuiltLinux 20.1.0
         run: |
@@ -48,58 +52,59 @@ jobs:
           tc/llvm-20.1.0/bin/clang --version | grep -q 'clang version 20.1.0'
           echo "$GITHUB_WORKSPACE/tc/llvm-20.1.0/bin" >> "$GITHUB_PATH"
 
-      - name: Configure BOOTFIX8 DIAG
+      - name: Configure BOOTFIX8 baseline
         run: |
-          rm -rf kernel/outdiag
-          make -C kernel O=outdiag LLVM=1 surya_defconfig
-          python3 .github/scripts/bootfix7_diag_config.py "$GITHUB_WORKSPACE" kernel
-          kernel/scripts/config --file kernel/outdiag/.config --disable KSU
-          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK
-          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK_BRINGUP
-          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK_NETFILTER
-          kernel/scripts/config --file kernel/outdiag/.config --disable SECURITY_SMACK_APPEND_SIGNALS
-          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE
-          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_CONSOLE
-          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_PMSG
-          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_RAM
-          kernel/scripts/config --file kernel/outdiag/.config --enable PSTORE_LAST_KMSG
-          kernel/scripts/config --file kernel/outdiag/.config --set-str LOCALVERSION '-riwutz_josjiz'
-          kernel/scripts/config --file kernel/outdiag/.config --disable LOCALVERSION_AUTO
-          make -C kernel O=outdiag LLVM=1 olddefconfig
-          cp kernel/outdiag/.config bootfix8-diag.config
-          grep -q '^CONFIG_PSTORE_CONSOLE=y$' kernel/outdiag/.config
-          grep -q '^CONFIG_PSTORE_RAM=y$' kernel/outdiag/.config
-          grep -q '^# CONFIG_KSU is not set$' kernel/outdiag/.config
-          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' kernel/outdiag/.config
+          rm -rf kernel/outfix8
+          make -C kernel O=outfix8 LLVM=1 surya_defconfig
+          python3 .github/scripts/bootfix7_diag_config.py "$GITHUB_WORKSPACE" kernel outfix8
+          kernel/scripts/config --file kernel/outfix8/.config --disable KSU
+          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK
+          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK_BRINGUP
+          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK_NETFILTER
+          kernel/scripts/config --file kernel/outfix8/.config --disable SECURITY_SMACK_APPEND_SIGNALS
+          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE
+          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_CONSOLE
+          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_PMSG
+          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_RAM
+          kernel/scripts/config --file kernel/outfix8/.config --enable PSTORE_LAST_KMSG
+          kernel/scripts/config --file kernel/outfix8/.config --set-str LOCALVERSION '-riwutz_josjiz'
+          kernel/scripts/config --file kernel/outfix8/.config --disable LOCALVERSION_AUTO
+          make -C kernel O=outfix8 LLVM=1 olddefconfig
+          cp kernel/outfix8/.config bootfix8-baseline.config
+          grep -q '^CONFIG_PSTORE_CONSOLE=y$' kernel/outfix8/.config
+          grep -q '^CONFIG_PSTORE_RAM=y$' kernel/outfix8/.config
+          grep -q '^# CONFIG_KSU is not set$' kernel/outfix8/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' kernel/outfix8/.config
 
-      - name: Build BOOTFIX8 DIAG Image
+      - name: Build BOOTFIX8 baseline Image
         env:
           KBUILD_BUILD_USER: riwutz
           KBUILD_BUILD_HOST: cahazzu
         run: |
           set -o pipefail
-          make -C kernel O=outdiag -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee bootfix8-diag-build.log
-          test -s kernel/outdiag/arch/arm64/boot/Image.gz
-          cp kernel/outdiag/arch/arm64/boot/Image.gz Image-BOOTFIX8-DIAG.gz
-          gzip -dc Image-BOOTFIX8-DIAG.gz > Image-BOOTFIX8-DIAG.raw
-          strings Image-BOOTFIX8-DIAG.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee bootfix8-diag-version.txt
-          strings Image-BOOTFIX8-DIAG.raw | grep -F 'RIWUTZ_BOOTFIX7_DIAG_TIMEOUT_45S' | head -n1 | tee bootfix8-diag-panic-marker.txt
-          strings Image-BOOTFIX8-DIAG.raw | grep -F 'RIWUTZ_BOOTFIX8_QUSB_LEGACY10' | head -n1 | tee bootfix8-qusb-marker.txt
-          ! strings Image-BOOTFIX8-DIAG.raw | grep -q 'KernelSU:'
-          rm -f Image-BOOTFIX8-DIAG.raw
-          sha256sum Image-BOOTFIX8-DIAG.gz | tee Image-BOOTFIX8-DIAG.gz.sha256
+          make -C kernel O=outfix8 -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee bootfix8-baseline-build.log
+          test -s kernel/outfix8/arch/arm64/boot/Image.gz
+          cp kernel/outfix8/arch/arm64/boot/Image.gz Image-BOOTFIX8.gz
+          gzip -dc Image-BOOTFIX8.gz > Image-BOOTFIX8.raw
+          strings Image-BOOTFIX8.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee bootfix8-version.txt
+          strings Image-BOOTFIX8.raw | grep -F 'RIWUTZ_BOOTFIX8_QUSB_LEGACY10' | head -n1 | tee bootfix8-qusb-marker.txt
+          strings Image-BOOTFIX8.raw | grep -F 'fallback SWIOTLB' | head -n1 | tee bootfix8-swiotlb-marker.txt
+          ! strings Image-BOOTFIX8.raw | grep -q 'RIWUTZ_BOOTFIX7_DIAG_TIMEOUT_45S'
+          ! strings Image-BOOTFIX8.raw | grep -q 'KernelSU:'
+          rm -f Image-BOOTFIX8.raw
+          sha256sum Image-BOOTFIX8.gz | tee Image-BOOTFIX8.gz.sha256
 
-      - name: Upload BOOTFIX8 DIAG artifact
+      - name: Upload BOOTFIX8 baseline artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riwutz_josjiz-BOOTFIX8-QUSB-LEGACY-A10
+          name: riwutz_josjiz-BOOTFIX8-QUSB-LEGACY-BASELINE-A10
           retention-days: 30
           path: |
-            Image-BOOTFIX8-DIAG.gz
-            Image-BOOTFIX8-DIAG.gz.sha256
-            bootfix8-diag.config
-            bootfix8-diag-build.log
-            bootfix8-diag-version.txt
-            bootfix8-diag-panic-marker.txt
+            Image-BOOTFIX8.gz
+            Image-BOOTFIX8.gz.sha256
+            bootfix8-baseline.config
+            bootfix8-baseline-build.log
+            bootfix8-version.txt
             bootfix8-qusb-marker.txt
+            bootfix8-swiotlb-marker.txt
