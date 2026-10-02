@@ -1,0 +1,197 @@
+name: riwutz_josjiz A10 BOOTFIX7-DIAG 4.14.355
+
+on:
+  push:
+    branches: [riwutz-a10-bootfix2]
+    paths:
+      - '.github/workflows/riwutz-josjiz-a10-bootfix7-diag.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex git libelf-dev libssl-dev python3 unzip xz-utils zip
+
+      - name: Checkout exact Watermelon 4.14.355 donor base
+        run: |
+          rm -rf kernel
+          git init kernel
+          git -C kernel remote add origin https://github.com/xradens/msm-4.14.git
+          git -C kernel fetch --depth=1 origin 95dffb0397b21a8a54fefec47801ab460be5532f
+          git -C kernel checkout --detach FETCH_HEAD
+          test "$(git -C kernel rev-parse HEAD)" = "95dffb0397b21a8a54fefec47801ab460be5532f"
+          grep -q '^SUBLEVEL = 355$' kernel/Makefile
+
+      - name: Apply BOOTFIX7 plus diagnostic timeout
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('kernel/sched/fair.c'); s=p.read_text()
+          old="return max(task_util(p), _task_util_est(p));\n}\n\n#ifdef CONFIG_UCLAMP_TASK\n"
+          new="return max(task_util(p), _task_util_est(p));\n}\n\nstatic inline unsigned long boosted_task_util(struct task_struct *task);\n\n#ifdef CONFIG_UCLAMP_TASK\n"
+          if old not in s: raise SystemExit('fair.c anchor missing')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('block/mq-deadline.c'); s=p.read_text()
+          bad="static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n\tstruct deadline_data *dd = hctx->queue->elevator->elevator_data;\n"
+          good="static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n"
+          if bad not in s: raise SystemExit('mq-deadline anchor missing')
+          p.write_text(s.replace(bad,good,1))
+
+          p=Path('lib/lz4/lz4_decompress.c'); s=p.read_text()
+          s=s.replace('EXPORT_SYMBOL(LZ4_armv8_decompress_safe);','EXPORT_SYMBOL(LZ4_arm64_decompress_safe);',1)
+          s=s.replace('EXPORT_SYMBOL(LZ4_armv8_decompress_safe_partial);','EXPORT_SYMBOL(LZ4_arm64_decompress_safe_partial);',1)
+          p.write_text(s)
+
+          p=Path('drivers/soc/qcom/msm_bus/msm_bus_dbg_rpmh.c'); s=p.read_text()
+          anchor='#include <trace/events/trace_msm_bus.h>'
+          if '#define CREATE_TRACE_POINTS' not in s:
+              if anchor not in s: raise SystemExit('msm bus trace anchor missing')
+              s=s.replace(anchor,'#define CREATE_TRACE_POINTS\n'+anchor,1)
+          p.write_text(s)
+
+          p=Path('arch/arm64/mm/dma-mapping.c'); s=p.read_text()
+          old='''\t\tpage = dma_alloc_from_contiguous(dev, size >> PAGE_SHIFT,\n\t\t\t\t\t\t get_order(size), flags);\n\t\tif (!page)\n\t\t\treturn NULL;\n\n\t\t*dma_handle = phys_to_dma(dev, page_to_phys(page));\n\t\taddr = page_address(page);\n\t\tmemset(addr, 0, size);\n\t} else {\n\t\taddr = swiotlb_alloc_coherent(dev, size, dma_handle, flags);\n\t}\n'''
+          new='''\t\tpage = dma_alloc_from_contiguous(dev, size >> PAGE_SHIFT,\n\t\t\t\t\t\t get_order(size), flags);\n\t\tif (page) {\n\t\t\t*dma_handle = phys_to_dma(dev, page_to_phys(page));\n\t\t\taddr = page_address(page);\n\t\t\tmemset(addr, 0, size);\n\t\t} else {\n\t\t\tpr_warn_ratelimited("riwutz: CMA coherent alloc failed for %s (%zu), fallback SWIOTLB\\n",\n\t\t\t\tdev_name(dev), size);\n\t\t\taddr = swiotlb_alloc_coherent(dev, size, dma_handle, flags);\n\t\t}\n\t} else {\n\t\taddr = swiotlb_alloc_coherent(dev, size, dma_handle, flags);\n\t}\n'''
+          if old not in s: raise SystemExit('dma CMA fallback anchor missing')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('drivers/usb/dwc3/dwc3-msm.c'); s=p.read_text()
+          old='''\tif (IS_ERR(mdwc->hs_phy)) {\n\t\tdev_err(&pdev->dev, "unable to get hsphy device\\n");\n\t\tret = PTR_ERR(mdwc->hs_phy);\n\t\tgoto put_dwc3;\n\t}\n'''
+          new='''\tif (IS_ERR(mdwc->hs_phy)) {\n\t\tret = PTR_ERR(mdwc->hs_phy);\n\t\tif (ret == -EPROBE_DEFER) {\n\t\t\tdev_info_ratelimited(&pdev->dev, "hsphy not ready; delaying reprobe\\n");\n\t\t\tmsleep(100);\n\t\t} else {\n\t\t\tdev_err(&pdev->dev, "unable to get hsphy device: %d\\n", ret);\n\t\t}\n\t\tgoto put_dwc3;\n\t}\n'''
+          if old not in s: raise SystemExit('hsphy anchor missing')
+          s=s.replace(old,new,1)
+          old='''\tif (IS_ERR(mdwc->ss_phy)) {\n\t\tdev_err(&pdev->dev, "unable to get ssphy device\\n");\n\t\tret = PTR_ERR(mdwc->ss_phy);\n\t\tgoto put_dwc3;\n\t}\n'''
+          new='''\tif (IS_ERR(mdwc->ss_phy)) {\n\t\tret = PTR_ERR(mdwc->ss_phy);\n\t\tif (ret == -EPROBE_DEFER) {\n\t\t\tdev_info_ratelimited(&pdev->dev, "ssphy not ready; delaying reprobe\\n");\n\t\t\tmsleep(100);\n\t\t} else {\n\t\t\tdev_err(&pdev->dev, "unable to get ssphy device: %d\\n", ret);\n\t\t}\n\t\tgoto put_dwc3;\n\t}\n'''
+          if old not in s: raise SystemExit('ssphy anchor missing')
+          p.write_text(s.replace(old,new,1))
+
+          diag = r'''#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/kthread.h>
+#include <linux/delay.h>
+
+static int riwutz_diag_thread(void *unused)
+{
+    ssleep(45);
+    panic_timeout = 5;
+    panic("RIWUTZ_BOOTFIX7_DIAG_TIMEOUT_45S");
+    return 0;
+}
+
+static int __init riwutz_diag_init(void)
+{
+    struct task_struct *t;
+    t = kthread_run(riwutz_diag_thread, NULL, "riwutz_diag");
+    if (IS_ERR(t))
+        pr_err("riwutz_diag: failed to start timeout thread\n");
+    else
+        pr_info("riwutz_diag: 45s timeout armed\n");
+    return 0;
+}
+core_initcall(riwutz_diag_init);
+'''
+          Path('kernel/riwutz_diag.c').write_text(diag)
+          mk=Path('kernel/Makefile'); m=mk.read_text()
+          if 'obj-y += riwutz_diag.o' not in m:
+              m += '\nobj-y += riwutz_diag.o\n'
+          mk.write_text(m)
+          PY
+          grep -n 'fallback SWIOTLB' arch/arm64/mm/dma-mapping.c
+          grep -n 'delaying reprobe' drivers/usb/dwc3/dwc3-msm.c
+          grep -n 'RIWUTZ_BOOTFIX7_DIAG_TIMEOUT_45S' kernel/riwutz_diag.c
+
+      - name: Prepare ClangBuiltLinux LLVM 20.1.0
+        run: |
+          rm -rf tc llvm-20.1.0-x86_64.tar.xz
+          mkdir -p tc/llvm-20.1.0
+          curl -L --fail --retry 3 https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.0-x86_64.tar.xz -o llvm-20.1.0-x86_64.tar.xz
+          test "$(stat -c%s llvm-20.1.0-x86_64.tar.xz)" = "129714604"
+          tar -xJf llvm-20.1.0-x86_64.tar.xz -C tc/llvm-20.1.0 --strip-components=1
+          tc/llvm-20.1.0/bin/clang --version | grep -q 'clang version 20.1.0'
+          echo "$GITHUB_WORKSPACE/tc/llvm-20.1.0/bin" >> "$GITHUB_PATH"
+
+      - name: Configure BOOTFIX7-DIAG 4.14.355
+        working-directory: kernel
+        run: |
+          rm -rf out7d
+          make O=out7d LLVM=1 surya_defconfig
+          cat \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part00" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01a" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01b" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part02" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part03" \
+            > ../wih-riwut-a10-delta.config
+          echo '1692159dfb98bb4889e5bd9e2ffb07ee604936eeb30f37420e4cda4286d25105  ../wih-riwut-a10-delta.config' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+          cfg=Path('out7d/.config'); delta=Path('../wih-riwut-a10-delta.config')
+          lines=cfg.read_text().splitlines(); pos={}
+          for i,line in enumerate(lines):
+              if line.startswith('CONFIG_') and '=' in line: pos[line.split('=',1)[0]]=i
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'): pos[line.split()[1]]=i
+          for line in delta.read_text().splitlines():
+              line=line.strip()
+              if not line: continue
+              if line.startswith('CONFIG_') and '=' in line: key=line.split('=',1)[0]
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'): key=line.split()[1]
+              else: continue
+              if key in pos: lines[pos[key]]=line
+              else: pos[key]=len(lines); lines.append(line)
+          cfg.write_text('\n'.join(lines)+'\n')
+          PY
+          scripts/config --file out7d/.config --disable KSU
+          scripts/config --file out7d/.config --disable SECURITY_SMACK
+          scripts/config --file out7d/.config --enable PSTORE
+          scripts/config --file out7d/.config --enable PSTORE_CONSOLE
+          scripts/config --file out7d/.config --enable PSTORE_RAM
+          scripts/config --file out7d/.config --enable PSTORE_LAST_KMSG
+          scripts/config --file out7d/.config --set-str LOCALVERSION '-riwutz_josjiz'
+          scripts/config --file out7d/.config --disable LOCALVERSION_AUTO
+          make O=out7d LLVM=1 olddefconfig
+          cp out7d/.config ../bootfix7diag.config
+          grep -q '^# CONFIG_KSU is not set$' out7d/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' out7d/.config
+          grep -q '^CONFIG_PSTORE_CONSOLE=y$' out7d/.config
+
+      - name: Build BOOTFIX7-DIAG 4.14.355 Image
+        working-directory: kernel
+        env:
+          KBUILD_BUILD_USER: riwutz
+          KBUILD_BUILD_HOST: cahazzu
+        run: |
+          set -o pipefail
+          make O=out7d -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee ../bootfix7diag-build.log
+          test -s out7d/arch/arm64/boot/Image.gz
+          cp out7d/arch/arm64/boot/Image.gz ../Image-BOOTFIX7-DIAG.gz
+          gzip -dc out7d/arch/arm64/boot/Image.gz > ../Image-BOOTFIX7-DIAG.raw
+          strings ../Image-BOOTFIX7-DIAG.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee ../bootfix7diag-version.txt
+          strings ../Image-BOOTFIX7-DIAG.raw | grep -F 'RIWUTZ_BOOTFIX7_DIAG_TIMEOUT_45S' | head -n1 | tee ../bootfix7diag-marker.txt
+          ! strings ../Image-BOOTFIX7-DIAG.raw | grep -q 'KernelSU:'
+          rm -f ../Image-BOOTFIX7-DIAG.raw
+          sha256sum ../Image-BOOTFIX7-DIAG.gz | tee ../Image-BOOTFIX7-DIAG.gz.sha256
+
+      - name: Upload BOOTFIX7-DIAG artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz-BOOTFIX7-DIAG-A10
+          retention-days: 30
+          path: |
+            Image-BOOTFIX7-DIAG.gz
+            Image-BOOTFIX7-DIAG.gz.sha256
+            bootfix7diag.config
+            bootfix7diag-build.log
+            bootfix7diag-version.txt
+            bootfix7diag-marker.txt
