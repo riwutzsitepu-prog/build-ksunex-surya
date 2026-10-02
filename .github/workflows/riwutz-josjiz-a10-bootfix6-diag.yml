@@ -1,4 +1,4 @@
-name: riwutz_josjiz A10 BOOTFIX7 DIAG3 4.14.355
+name: riwutz_josjiz A10 BOOTFIX7 DIAG4 4.14.355
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
       - '.github/workflows/riwutz-josjiz-a10-bootfix6-diag.yml'
       - '.github/scripts/bootfix7_diag_patch.py'
       - '.github/scripts/bootfix7_diag_config.py'
+      - '.github/scripts/fix_mq_deadline_diag.py'
   workflow_dispatch:
 
 jobs:
@@ -31,7 +32,9 @@ jobs:
           grep -q '^SUBLEVEL = 355$' kernel/Makefile
 
       - name: Apply BOOTFIX7 diagnostic patch set
-        run: python3 .github/scripts/bootfix7_diag_patch.py kernel
+        run: |
+          python3 .github/scripts/bootfix7_diag_patch.py kernel
+          python3 .github/scripts/fix_mq_deadline_diag.py kernel
 
       - name: Prepare ClangBuiltLinux 20.1.0
         run: |
@@ -43,7 +46,7 @@ jobs:
           tc/llvm-20.1.0/bin/clang --version | grep -q 'clang version 20.1.0'
           echo "$GITHUB_WORKSPACE/tc/llvm-20.1.0/bin" >> "$GITHUB_PATH"
 
-      - name: Configure BOOTFIX7 DIAG3
+      - name: Configure BOOTFIX7 DIAG4
         run: |
           rm -rf kernel/outdiag
           make -C kernel O=outdiag LLVM=1 surya_defconfig
@@ -67,7 +70,7 @@ jobs:
           grep -q '^# CONFIG_KSU is not set$' kernel/outdiag/.config
           grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' kernel/outdiag/.config
 
-      - name: Build BOOTFIX7 DIAG3 Image
+      - name: Build BOOTFIX7 DIAG4 Image
         env:
           KBUILD_BUILD_USER: riwutz
           KBUILD_BUILD_HOST: cahazzu
@@ -84,11 +87,11 @@ jobs:
           rm -f Image-BOOTFIX7-DIAG.raw
           sha256sum Image-BOOTFIX7-DIAG.gz | tee Image-BOOTFIX7-DIAG.gz.sha256
 
-      - name: Upload BOOTFIX7 DIAG3 artifact
+      - name: Upload BOOTFIX7 DIAG4 artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: riwutz_josjiz-BOOTFIX7-DIAG3-A10
+          name: riwutz_josjiz-BOOTFIX7-DIAG4-A10
           retention-days: 30
           path: |
             Image-BOOTFIX7-DIAG.gz
