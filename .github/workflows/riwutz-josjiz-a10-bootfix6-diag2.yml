@@ -1,0 +1,196 @@
+name: riwutz_josjiz A10 BOOTFIX6 DIAG2 4.14.355
+
+on:
+  push:
+    branches: [riwutz-a10-bootfix2]
+    paths:
+      - '.github/workflows/riwutz-josjiz-a10-bootfix6-diag2.yml'
+      - '.github/configs/wih-riwut-a10-delta.part*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y bc bison build-essential ccache curl flex git libelf-dev libssl-dev python3 unzip xz-utils zip
+
+      - name: Checkout exact Watermelon 4.14.355 donor base
+        run: |
+          rm -rf kernel
+          git init kernel
+          git -C kernel remote add origin https://github.com/xradens/msm-4.14.git
+          git -C kernel fetch --depth=1 origin 95dffb0397b21a8a54fefec47801ab460be5532f
+          git -C kernel checkout --detach FETCH_HEAD
+          test "$(git -C kernel rev-parse HEAD)" = "95dffb0397b21a8a54fefec47801ab460be5532f"
+          grep -q '^SUBLEVEL = 355$' kernel/Makefile
+
+      - name: Apply BOOTFIX6 compatibility and diagnostic timeout
+        working-directory: kernel
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('kernel/sched/fair.c')
+          s = p.read_text()
+          old = "return max(task_util(p), _task_util_est(p));\n}\n\n#ifdef CONFIG_UCLAMP_TASK\n"
+          new = "return max(task_util(p), _task_util_est(p));\n}\n\nstatic inline unsigned long boosted_task_util(struct task_struct *task);\n\n#ifdef CONFIG_UCLAMP_TASK\n"
+          if old not in s:
+              raise SystemExit('boosted_task_util declaration anchor not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('block/mq-deadline.c')
+          s = p.read_text()
+          bad = "static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n\tstruct deadline_data *dd = hctx->queue->elevator->elevator_data;\n"
+          good = "static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n"
+          if bad not in s:
+              raise SystemExit('mq-deadline duplicate dd anchor not found')
+          p.write_text(s.replace(bad, good, 1))
+
+          p = Path('lib/lz4/lz4_decompress.c')
+          s = p.read_text()
+          s = s.replace('EXPORT_SYMBOL(LZ4_armv8_decompress_safe);', 'EXPORT_SYMBOL(LZ4_arm64_decompress_safe);', 1)
+          s = s.replace('EXPORT_SYMBOL(LZ4_armv8_decompress_safe_partial);', 'EXPORT_SYMBOL(LZ4_arm64_decompress_safe_partial);', 1)
+          p.write_text(s)
+
+          p = Path('drivers/soc/qcom/msm_bus/msm_bus_dbg_rpmh.c')
+          s = p.read_text()
+          old = '#include <trace/events/trace_msm_bus.h>'
+          if '#define CREATE_TRACE_POINTS' not in s:
+              if old not in s:
+                  raise SystemExit('msm bus trace header anchor not found')
+              s = s.replace(old, '#define CREATE_TRACE_POINTS\n' + old, 1)
+          p.write_text(s)
+
+          p = Path('init/main.c')
+          s = p.read_text()
+          if 'RIWUTZ_DIAG_TIMEOUT_45S' in s:
+              raise SystemExit('diagnostic timeout already present unexpectedly')
+          diag = (
+              "\n\n/* RIWUTZ BOOTFIX6 diagnostic: force a warm panic after 45 seconds. */\n"
+              "static int riwutz_diag_timeout_thread(void *unused)\n"
+              "{\n"
+              "\tpr_emerg(\"RIWUTZ_DIAG: 45-second timeout armed\\n\");\n"
+              "\tssleep(45);\n"
+              "\tpanic_timeout = 5;\n"
+              "\tpanic(\"RIWUTZ_DIAG_TIMEOUT_45S\");\n"
+              "\treturn 0;\n"
+              "}\n\n"
+              "static int __init riwutz_diag_timeout_init(void)\n"
+              "{\n"
+              "\tstruct task_struct *task;\n\n"
+              "\ttask = kthread_run(riwutz_diag_timeout_thread, NULL, \"riwutz_diag\");\n"
+              "\tif (IS_ERR(task))\n"
+              "\t\treturn PTR_ERR(task);\n"
+              "\treturn 0;\n"
+              "}\n"
+              "core_initcall(riwutz_diag_timeout_init);\n"
+          )
+          p.write_text(s + diag)
+          PY
+          grep -n 'RIWUTZ_DIAG_TIMEOUT_45S' init/main.c
+          grep -n '#define CREATE_TRACE_POINTS' drivers/soc/qcom/msm_bus/msm_bus_dbg_rpmh.c
+
+      - name: Prepare ClangBuiltLinux LLVM 20.1.0
+        run: |
+          rm -rf tc llvm-20.1.0-x86_64.tar.xz
+          mkdir -p tc/llvm-20.1.0
+          curl -L --fail --retry 3 https://mirrors.edge.kernel.org/pub/tools/llvm/files/llvm-20.1.0-x86_64.tar.xz -o llvm-20.1.0-x86_64.tar.xz
+          test "$(stat -c%s llvm-20.1.0-x86_64.tar.xz)" = "129714604"
+          tar -xJf llvm-20.1.0-x86_64.tar.xz -C tc/llvm-20.1.0 --strip-components=1
+          tc/llvm-20.1.0/bin/clang --version | grep -q 'clang version 20.1.0'
+          echo "$GITHUB_WORKSPACE/tc/llvm-20.1.0/bin" >> "$GITHUB_PATH"
+
+      - name: Configure BOOTFIX6 DIAG2 4.14.355
+        working-directory: kernel
+        run: |
+          rm -rf outdiag
+          make O=outdiag LLVM=1 surya_defconfig
+          cat \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part00" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01a" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part01b" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part02" \
+            "$GITHUB_WORKSPACE/.github/configs/wih-riwut-a10-delta.part03" \
+            > ../wih-riwut-a10-delta.config
+          echo '1692159dfb98bb4889e5bd9e2ffb07ee604936eeb30f37420e4cda4286d25105  ../wih-riwut-a10-delta.config' | sha256sum -c -
+
+          python3 - <<'PY'
+          from pathlib import Path
+          cfg=Path('outdiag/.config'); delta=Path('../wih-riwut-a10-delta.config')
+          lines=cfg.read_text().splitlines(); pos={}
+          for i,line in enumerate(lines):
+              if line.startswith('CONFIG_') and '=' in line: pos[line.split('=',1)[0]]=i
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'): pos[line.split()[1]]=i
+          for line in delta.read_text().splitlines():
+              line=line.strip()
+              if not line: continue
+              if line.startswith('CONFIG_') and '=' in line: key=line.split('=',1)[0]
+              elif line.startswith('# CONFIG_') and line.endswith(' is not set'): key=line.split()[1]
+              else: continue
+              if key in pos: lines[pos[key]]=line
+              else: pos[key]=len(lines); lines.append(line)
+          cfg.write_text('\n'.join(lines)+'\n')
+          PY
+
+          scripts/config --file outdiag/.config --disable KSU
+          scripts/config --file outdiag/.config --disable SECURITY_SMACK
+          scripts/config --file outdiag/.config --disable SECURITY_SMACK_BRINGUP
+          scripts/config --file outdiag/.config --disable SECURITY_SMACK_NETFILTER
+          scripts/config --file outdiag/.config --disable SECURITY_SMACK_APPEND_SIGNALS
+          scripts/config --file outdiag/.config --enable PSTORE
+          scripts/config --file outdiag/.config --enable PSTORE_CONSOLE
+          scripts/config --file outdiag/.config --enable PSTORE_PMSG
+          scripts/config --file outdiag/.config --enable PSTORE_RAM
+          scripts/config --file outdiag/.config --enable PSTORE_LAST_KMSG
+          scripts/config --file outdiag/.config --set-str LOCALVERSION '-riwutz_josjiz'
+          scripts/config --file outdiag/.config --disable LOCALVERSION_AUTO
+          make O=outdiag LLVM=1 olddefconfig
+          cp outdiag/.config ../bootfix6-diag.config
+
+          grep -q '^CONFIG_PSTORE=y$' outdiag/.config
+          grep -q '^CONFIG_PSTORE_CONSOLE=y$' outdiag/.config
+          grep -q '^CONFIG_PSTORE_RAM=y$' outdiag/.config
+          grep -q '^CONFIG_PSTORE_LAST_KMSG=y$' outdiag/.config
+          grep -q '^# CONFIG_KSU is not set$' outdiag/.config
+          grep -q '^CONFIG_LOCALVERSION="-riwutz_josjiz"$' outdiag/.config
+          grep -E '^(CONFIG_PSTORE|CONFIG_PSTORE_CONSOLE|CONFIG_PSTORE_PMSG|CONFIG_PSTORE_RAM|CONFIG_PSTORE_LAST_KMSG|CONFIG_LOCALVERSION=|# CONFIG_KSU is not set)' outdiag/.config | tee ../bootfix6-diag-key-config.txt
+
+      - name: Build BOOTFIX6 DIAG2 Image
+        working-directory: kernel
+        env:
+          KBUILD_BUILD_USER: riwutz
+          KBUILD_BUILD_HOST: cahazzu
+        run: |
+          set -o pipefail
+          make O=outdiag -j"$(nproc)" LLVM=1 Image.gz 2>&1 | tee ../bootfix6-diag-build.log
+          test -s outdiag/arch/arm64/boot/Image.gz
+          cp outdiag/arch/arm64/boot/Image.gz ../Image-BOOTFIX6-DIAG.gz
+          gzip -dc outdiag/arch/arm64/boot/Image.gz > ../Image-BOOTFIX6-DIAG.raw
+          strings ../Image-BOOTFIX6-DIAG.raw | grep -F 'Linux version 4.14.355-riwutz_josjiz' | head -n1 | tee ../bootfix6-diag-version.txt
+          strings ../Image-BOOTFIX6-DIAG.raw | grep -F 'RIWUTZ_DIAG_TIMEOUT_45S' | head -n1 | tee ../bootfix6-diag-marker.txt
+          ! strings ../Image-BOOTFIX6-DIAG.raw | grep -q 'KernelSU:'
+          rm -f ../Image-BOOTFIX6-DIAG.raw
+          sha256sum ../Image-BOOTFIX6-DIAG.gz | tee ../Image-BOOTFIX6-DIAG.gz.sha256
+
+      - name: Upload BOOTFIX6 DIAG2 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: riwutz_josjiz-BOOTFIX6-DIAG2-A10
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            Image-BOOTFIX6-DIAG.gz
+            Image-BOOTFIX6-DIAG.gz.sha256
+            bootfix6-diag.config
+            bootfix6-diag-key-config.txt
+            bootfix6-diag-build.log
+            bootfix6-diag-version.txt
+            bootfix6-diag-marker.txt
