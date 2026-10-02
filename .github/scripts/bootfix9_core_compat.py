@@ -56,7 +56,9 @@ p.write_text(s)
 print("MSM bus tracepoints: OK")
 
 assert "static inline unsigned long boosted_task_util(struct task_struct *task);" in (root / "kernel/sched/fair.c").read_text()
-assert "struct deadline_data *dd = hctx->queue->elevator->elevator_data;" not in (root / "block/mq-deadline.c").read_text()
+mq = (root / "block/mq-deadline.c").read_text()
+assert "static struct request *__dd_dispatch_request(struct deadline_data *dd)\n{\n\tstruct deadline_data *dd = hctx->queue->elevator->elevator_data;" not in mq
+assert "static struct request *__dd_dispatch_request(struct deadline_data *dd)" in mq
 assert "EXPORT_SYMBOL(LZ4_arm64_decompress_safe);" in (root / "lib/lz4/lz4_decompress.c").read_text()
 assert "#define CREATE_TRACE_POINTS" in (root / "drivers/soc/qcom/msm_bus/msm_bus_dbg_rpmh.c").read_text()
 print("BOOTFIX9 core compatibility set: VERIFIED")
