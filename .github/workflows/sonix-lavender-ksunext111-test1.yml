@@ -1,4 +1,4 @@
-name: SONIX Lavender KSUNext v1.1.1 TEST1
+name: SONIX Lavender KSUNext v1.1.1 TEST2
 
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
             -d KSU_DEBUG \
             -d KSU_ALLOWLIST_WORKAROUND \
             -d LOCALVERSION_AUTO \
-            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST1"
+            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST2"
 
           make O=out ARCH=arm64 olddefconfig
 
@@ -85,7 +85,15 @@ jobs:
 
           grep -q '^CONFIG_KSU=y$' out/.config
           grep -q '^CONFIG_OVERLAY_FS=y$' out/.config
-          grep -q '^# CONFIG_KSU_KPROBES_HOOK is not set$' out/.config
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y$' out/.config; then
+            echo "ERROR: KSU_KPROBES_HOOK unexpectedly enabled"
+            exit 1
+          fi
+          if grep -q '^CONFIG_KPROBES=y$' out/.config; then
+            echo "ERROR: CONFIG_KPROBES unexpectedly enabled"
+            exit 1
+          fi
+          echo "Manual-hook mode confirmed: no KPROBES/KSU_KPROBES_HOOK"
 
       - name: Compile Image.gz-dtb
         run: |
@@ -130,7 +138,7 @@ jobs:
           ## osm0sis @ xda-developers
 
           properties() { '
-          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST1 by RIWUTZ
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
           do.devicecheck=0
           do.modules=0
           do.systemless=1
@@ -179,7 +187,7 @@ jobs:
           AK3
 
           mkdir -p dist
-          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip"
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
           (
             cd AnyKernel3
             zip -qr9 "$OUTZIP" .
@@ -195,10 +203,10 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
           path: |
-            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip
-            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip.sha256
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
             dist/zip-list.txt
             source-info.txt
             config-check.txt
@@ -209,7 +217,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: S0NiX-Lavender-TEST1-logs
+          name: S0NiX-Lavender-TEST2-logs
           path: |
             build.log
             source-info.txt
