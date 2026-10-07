@@ -1,0 +1,219 @@
+name: SONIX Lavender KSUNext v1.1.1 TEST1
+
+on:
+  push:
+    branches:
+      - sonix-lavender-ksunext111
+    paths:
+      - ".github/workflows/sonix-lavender-ksunext111-test1.yml"
+      - "scripts/sonix_lavender_ksunext111_patch.py"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: X2-base OldCam + KSUNext v1.1.1
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential flex libssl-dev libelf-dev \
+            clang lld llvm \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            git curl zip unzip python3 cpio
+
+      - name: Clone clean S0NiX OldCam source
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch oldcam \
+            https://github.com/ImSpiDy/sonix_kernel_lavender-4.4.git kernel
+          cd kernel
+          echo "SOURCE_HEAD=$(git rev-parse HEAD)" | tee ../source-info.txt
+          grep -n 'CONFIG_LOCALVERSION=' arch/arm64/configs/lavender-perf_defconfig | head -n 2 | tee -a ../source-info.txt
+          grep -n 'Linux/arm64 4.4.205' arch/arm64/configs/lavender-perf_defconfig | head -n 2 | tee -a ../source-info.txt
+
+      - name: Integrate KernelSU Next v1.1.1 HOTFIX
+        run: |
+          set -euxo pipefail
+          cd kernel
+          curl -LSs \
+            https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh \
+            | bash -s v1.1.1
+          test -d KernelSU-Next
+          grep -R "KSU_KPROBES_HOOK" -n KernelSU-Next/kernel/Kconfig | head
+
+      - name: Apply Linux 4.4 manual hooks
+        run: |
+          set -euxo pipefail
+          python3 scripts/sonix_lavender_ksunext111_patch.py kernel
+          grep -R "ksu_handle_execveat" -n kernel/fs/exec.c | head
+          grep -R "ksu_handle_faccessat" -n kernel/fs/open.c | head
+          grep -R "ksu_handle_vfs_read" -n kernel/fs/read_write.c | head
+          grep -R "ksu_handle_stat" -n kernel/fs/stat.c | head
+
+      - name: Configure S0NiX OldCam + KSUNext
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export ARCH=arm64
+          rm -rf out
+          make O=out ARCH=arm64 lavender-perf_defconfig
+
+          scripts/config --file out/.config \
+            -e OVERLAY_FS \
+            -e KSU \
+            -d KSU_KPROBES_HOOK \
+            -e KSU_LSM_SECURITY_HOOKS \
+            -d KSU_DEBUG \
+            -d KSU_ALLOWLIST_WORKAROUND \
+            -d LOCALVERSION_AUTO \
+            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST1"
+
+          make O=out ARCH=arm64 olddefconfig
+
+          {
+            echo "=== FINAL KSU CONFIG ==="
+            grep -E 'CONFIG_(KSU|OVERLAY_FS|KPROBES)|CONFIG_LOCALVERSION' out/.config || true
+          } | tee ../config-check.txt
+
+          grep -q '^CONFIG_KSU=y$' out/.config
+          grep -q '^CONFIG_OVERLAY_FS=y$' out/.config
+          grep -q '^# CONFIG_KSU_KPROBES_HOOK is not set$' out/.config
+
+      - name: Compile Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=RIWUTZ
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          set -o pipefail
+          make O=out ARCH=arm64 \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM_IAS=1 \
+            -j2 Image.gz-dtb 2>&1 | tee ../build.log
+
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          file out/arch/arm64/boot/Image.gz-dtb | tee ../image-info.txt
+          sha256sum out/arch/arm64/boot/Image.gz-dtb | tee -a ../image-info.txt
+
+      - name: Create OrangeFox flashable AnyKernel3 ZIP
+        run: |
+          set -euxo pipefail
+          rm -rf AnyKernel3 dist
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git
+          rm -rf AnyKernel3/.git AnyKernel3/.github
+          rm -f AnyKernel3/Image* AnyKernel3/dtb AnyKernel3/dtbo AnyKernel3/vendor_boot.img
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+
+          cat > AnyKernel3/anykernel.sh <<'AK3'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          properties() { '
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST1 by RIWUTZ
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+
+          ver="$(file_getprop /system/build.prop ro.build.version.release)"
+          if [ ! -z "$ver" ]; then
+            patch_cmdline "androidboot.version" "androidboot.version=$ver"
+          else
+            patch_cmdline "androidboot.version" ""
+          fi
+
+          case "$ZIPFILE" in
+            *k1*|*K1*)
+              ui_print " " "• Enabled Sonix Battery Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=1"
+              ;;
+            *k2*|*K2*)
+              ui_print " " "• Enabled Sonix Efficient Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=2"
+              ;;
+            *k3*|*K3*)
+              ui_print " " "• Enabled Sonix Gaming Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=3"
+              ;;
+            *)
+              patch_cmdline "androidboot.sonix" ""
+              ;;
+          esac
+
+          write_boot;
+          AK3
+
+          mkdir -p dist
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip"
+          (
+            cd AnyKernel3
+            zip -qr9 "$OUTZIP" .
+          )
+
+          unzip -t "$OUTZIP"
+          unzip -l "$OUTZIP" | tee dist/zip-list.txt
+          unzip -l "$OUTZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$OUTZIP" | grep -q ' Image.gz-dtb'
+          sha256sum "$OUTZIP" | tee "$OUTZIP.sha256"
+
+      - name: Upload kernel test ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1
+          path: |
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip.sha256
+            dist/zip-list.txt
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-Lavender-TEST1-logs
+          path: |
+            build.log
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          if-no-files-found: ignore
+          retention-days: 14
