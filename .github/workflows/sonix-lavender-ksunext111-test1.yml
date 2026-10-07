@@ -1,4 +1,4 @@
-name: SONIX Lavender KSUNext v1.1.1 TEST1
+name: SONIX Lavender KSUNext v1.1.1 TEST2
 
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
             -d KSU_DEBUG \
             -d KSU_ALLOWLIST_WORKAROUND \
             -d LOCALVERSION_AUTO \
-            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST1"
+            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST2"
 
           make O=out ARCH=arm64 olddefconfig
 
@@ -83,9 +83,7 @@ jobs:
             grep -E 'CONFIG_(KSU|OVERLAY_FS|KPROBES)|CONFIG_LOCALVERSION' out/.config || true
           } | tee ../config-check.txt
 
-          grep -q '^CONFIG_KSU=y$' out/.config
-          grep -q '^CONFIG_OVERLAY_FS=y$' out/.config
-          grep -q '^# CONFIG_KSU_KPROBES_HOOK is not set$' out/.config
+          grep -q '^CONFIG_KSU=y
 
       - name: Compile Image.gz-dtb
         run: |
@@ -130,7 +128,7 @@ jobs:
           ## osm0sis @ xda-developers
 
           properties() { '
-          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST1 by RIWUTZ
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
           do.devicecheck=0
           do.modules=0
           do.systemless=1
@@ -179,7 +177,7 @@ jobs:
           AK3
 
           mkdir -p dist
-          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip"
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
           (
             cd AnyKernel3
             zip -qr9 "$OUTZIP" .
@@ -195,10 +193,10 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
           path: |
-            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip
-            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST1.zip.sha256
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
             dist/zip-list.txt
             source-info.txt
             config-check.txt
@@ -209,7 +207,545 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: S0NiX-Lavender-TEST1-logs
+          name: S0NiX-Lavender-TEST2-logs
+          path: |
+            build.log
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          if-no-files-found: ignore
+          retention-days: 14
+ out/.config
+          grep -q '^CONFIG_OVERLAY_FS=y
+
+      - name: Compile Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=RIWUTZ
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          set -o pipefail
+          make O=out ARCH=arm64 \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM_IAS=1 \
+            -j2 Image.gz-dtb 2>&1 | tee ../build.log
+
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          file out/arch/arm64/boot/Image.gz-dtb | tee ../image-info.txt
+          sha256sum out/arch/arm64/boot/Image.gz-dtb | tee -a ../image-info.txt
+
+      - name: Create OrangeFox flashable AnyKernel3 ZIP
+        run: |
+          set -euxo pipefail
+          rm -rf AnyKernel3 dist
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git
+          rm -rf AnyKernel3/.git AnyKernel3/.github
+          rm -f AnyKernel3/Image* AnyKernel3/dtb AnyKernel3/dtbo AnyKernel3/vendor_boot.img
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+
+          cat > AnyKernel3/anykernel.sh <<'AK3'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          properties() { '
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+
+          ver="$(file_getprop /system/build.prop ro.build.version.release)"
+          if [ ! -z "$ver" ]; then
+            patch_cmdline "androidboot.version" "androidboot.version=$ver"
+          else
+            patch_cmdline "androidboot.version" ""
+          fi
+
+          case "$ZIPFILE" in
+            *k1*|*K1*)
+              ui_print " " "• Enabled Sonix Battery Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=1"
+              ;;
+            *k2*|*K2*)
+              ui_print " " "• Enabled Sonix Efficient Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=2"
+              ;;
+            *k3*|*K3*)
+              ui_print " " "• Enabled Sonix Gaming Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=3"
+              ;;
+            *)
+              patch_cmdline "androidboot.sonix" ""
+              ;;
+          esac
+
+          write_boot;
+          AK3
+
+          mkdir -p dist
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
+          (
+            cd AnyKernel3
+            zip -qr9 "$OUTZIP" .
+          )
+
+          unzip -t "$OUTZIP"
+          unzip -l "$OUTZIP" | tee dist/zip-list.txt
+          unzip -l "$OUTZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$OUTZIP" | grep -q ' Image.gz-dtb'
+          sha256sum "$OUTZIP" | tee "$OUTZIP.sha256"
+
+      - name: Upload kernel test ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
+          path: |
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
+            dist/zip-list.txt
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-Lavender-TEST2-logs
+          path: |
+            build.log
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          if-no-files-found: ignore
+          retention-days: 14
+ out/.config
+          if grep -q '^CONFIG_KSU_KPROBES_HOOK=y
+
+      - name: Compile Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=RIWUTZ
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          set -o pipefail
+          make O=out ARCH=arm64 \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM_IAS=1 \
+            -j2 Image.gz-dtb 2>&1 | tee ../build.log
+
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          file out/arch/arm64/boot/Image.gz-dtb | tee ../image-info.txt
+          sha256sum out/arch/arm64/boot/Image.gz-dtb | tee -a ../image-info.txt
+
+      - name: Create OrangeFox flashable AnyKernel3 ZIP
+        run: |
+          set -euxo pipefail
+          rm -rf AnyKernel3 dist
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git
+          rm -rf AnyKernel3/.git AnyKernel3/.github
+          rm -f AnyKernel3/Image* AnyKernel3/dtb AnyKernel3/dtbo AnyKernel3/vendor_boot.img
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+
+          cat > AnyKernel3/anykernel.sh <<'AK3'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          properties() { '
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+
+          ver="$(file_getprop /system/build.prop ro.build.version.release)"
+          if [ ! -z "$ver" ]; then
+            patch_cmdline "androidboot.version" "androidboot.version=$ver"
+          else
+            patch_cmdline "androidboot.version" ""
+          fi
+
+          case "$ZIPFILE" in
+            *k1*|*K1*)
+              ui_print " " "• Enabled Sonix Battery Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=1"
+              ;;
+            *k2*|*K2*)
+              ui_print " " "• Enabled Sonix Efficient Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=2"
+              ;;
+            *k3*|*K3*)
+              ui_print " " "• Enabled Sonix Gaming Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=3"
+              ;;
+            *)
+              patch_cmdline "androidboot.sonix" ""
+              ;;
+          esac
+
+          write_boot;
+          AK3
+
+          mkdir -p dist
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
+          (
+            cd AnyKernel3
+            zip -qr9 "$OUTZIP" .
+          )
+
+          unzip -t "$OUTZIP"
+          unzip -l "$OUTZIP" | tee dist/zip-list.txt
+          unzip -l "$OUTZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$OUTZIP" | grep -q ' Image.gz-dtb'
+          sha256sum "$OUTZIP" | tee "$OUTZIP.sha256"
+
+      - name: Upload kernel test ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
+          path: |
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
+            dist/zip-list.txt
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-Lavender-TEST2-logs
+          path: |
+            build.log
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          if-no-files-found: ignore
+          retention-days: 14
+ out/.config; then
+            echo "ERROR: KSU_KPROBES_HOOK unexpectedly enabled"
+            exit 1
+          fi
+          if grep -q '^CONFIG_KPROBES=y
+
+      - name: Compile Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=RIWUTZ
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          set -o pipefail
+          make O=out ARCH=arm64 \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM_IAS=1 \
+            -j2 Image.gz-dtb 2>&1 | tee ../build.log
+
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          file out/arch/arm64/boot/Image.gz-dtb | tee ../image-info.txt
+          sha256sum out/arch/arm64/boot/Image.gz-dtb | tee -a ../image-info.txt
+
+      - name: Create OrangeFox flashable AnyKernel3 ZIP
+        run: |
+          set -euxo pipefail
+          rm -rf AnyKernel3 dist
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git
+          rm -rf AnyKernel3/.git AnyKernel3/.github
+          rm -f AnyKernel3/Image* AnyKernel3/dtb AnyKernel3/dtbo AnyKernel3/vendor_boot.img
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+
+          cat > AnyKernel3/anykernel.sh <<'AK3'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          properties() { '
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+
+          ver="$(file_getprop /system/build.prop ro.build.version.release)"
+          if [ ! -z "$ver" ]; then
+            patch_cmdline "androidboot.version" "androidboot.version=$ver"
+          else
+            patch_cmdline "androidboot.version" ""
+          fi
+
+          case "$ZIPFILE" in
+            *k1*|*K1*)
+              ui_print " " "• Enabled Sonix Battery Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=1"
+              ;;
+            *k2*|*K2*)
+              ui_print " " "• Enabled Sonix Efficient Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=2"
+              ;;
+            *k3*|*K3*)
+              ui_print " " "• Enabled Sonix Gaming Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=3"
+              ;;
+            *)
+              patch_cmdline "androidboot.sonix" ""
+              ;;
+          esac
+
+          write_boot;
+          AK3
+
+          mkdir -p dist
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
+          (
+            cd AnyKernel3
+            zip -qr9 "$OUTZIP" .
+          )
+
+          unzip -t "$OUTZIP"
+          unzip -l "$OUTZIP" | tee dist/zip-list.txt
+          unzip -l "$OUTZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$OUTZIP" | grep -q ' Image.gz-dtb'
+          sha256sum "$OUTZIP" | tee "$OUTZIP.sha256"
+
+      - name: Upload kernel test ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
+          path: |
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
+            dist/zip-list.txt
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-Lavender-TEST2-logs
+          path: |
+            build.log
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          if-no-files-found: ignore
+          retention-days: 14
+ out/.config; then
+            echo "ERROR: CONFIG_KPROBES unexpectedly enabled"
+            exit 1
+          fi
+          echo "Manual-hook mode confirmed: no KPROBES/KSU_KPROBES_HOOK"
+
+      - name: Compile Image.gz-dtb
+        run: |
+          set -euxo pipefail
+          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=RIWUTZ
+          export KBUILD_BUILD_HOST=CahAzzu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_COMPAT=arm-linux-gnueabi-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+
+          set -o pipefail
+          make O=out ARCH=arm64 \
+            CC=clang HOSTCC=clang HOSTCXX=clang++ \
+            LD=ld.lld AR=llvm-ar NM=llvm-nm \
+            OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LLVM_IAS=1 \
+            -j2 Image.gz-dtb 2>&1 | tee ../build.log
+
+          test -s out/arch/arm64/boot/Image.gz-dtb
+          file out/arch/arm64/boot/Image.gz-dtb | tee ../image-info.txt
+          sha256sum out/arch/arm64/boot/Image.gz-dtb | tee -a ../image-info.txt
+
+      - name: Create OrangeFox flashable AnyKernel3 ZIP
+        run: |
+          set -euxo pipefail
+          rm -rf AnyKernel3 dist
+          git clone --depth 1 https://github.com/osm0sis/AnyKernel3.git
+          rm -rf AnyKernel3/.git AnyKernel3/.github
+          rm -f AnyKernel3/Image* AnyKernel3/dtb AnyKernel3/dtbo AnyKernel3/vendor_boot.img
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+
+          cat > AnyKernel3/anykernel.sh <<'AK3'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          properties() { '
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          supported.versions=
+          supported.patchlevels=
+          '; }
+
+          block=/dev/block/bootdevice/by-name/boot;
+          is_slot_device=auto;
+          ramdisk_compression=auto;
+          patch_vbmeta_flag=auto;
+
+          . tools/ak3-core.sh;
+
+          dump_boot;
+
+          ver="$(file_getprop /system/build.prop ro.build.version.release)"
+          if [ ! -z "$ver" ]; then
+            patch_cmdline "androidboot.version" "androidboot.version=$ver"
+          else
+            patch_cmdline "androidboot.version" ""
+          fi
+
+          case "$ZIPFILE" in
+            *k1*|*K1*)
+              ui_print " " "• Enabled Sonix Battery Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=1"
+              ;;
+            *k2*|*K2*)
+              ui_print " " "• Enabled Sonix Efficient Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=2"
+              ;;
+            *k3*|*K3*)
+              ui_print " " "• Enabled Sonix Gaming Mode "
+              patch_cmdline "androidboot.sonix" "androidboot.sonix=3"
+              ;;
+            *)
+              patch_cmdline "androidboot.sonix" ""
+              ;;
+          esac
+
+          write_boot;
+          AK3
+
+          mkdir -p dist
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
+          (
+            cd AnyKernel3
+            zip -qr9 "$OUTZIP" .
+          )
+
+          unzip -t "$OUTZIP"
+          unzip -l "$OUTZIP" | tee dist/zip-list.txt
+          unzip -l "$OUTZIP" | grep -q 'META-INF/com/google/android/update-binary'
+          unzip -l "$OUTZIP" | grep -q ' Image.gz-dtb'
+          sha256sum "$OUTZIP" | tee "$OUTZIP.sha256"
+
+      - name: Upload kernel test ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
+          path: |
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
+            dist/zip-list.txt
+            source-info.txt
+            config-check.txt
+            image-info.txt
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: S0NiX-Lavender-TEST2-logs
           path: |
             build.log
             source-info.txt
