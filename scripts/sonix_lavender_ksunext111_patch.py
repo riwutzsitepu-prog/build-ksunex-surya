@@ -110,3 +110,5 @@ if "ksu_handle_stat(&dfd, &filename" not in s:
         raise SystemExit("[ERR] vfs_fstatat/vfs_statx tidak ditemukan")
 
 print("[OK] manual hooks KSUNext v1.1.1: execveat/faccessat/vfs_read/stat")
+
+# trigger TEST1 after workflow registration on default branch
