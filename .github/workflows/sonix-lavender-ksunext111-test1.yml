@@ -1,4 +1,4 @@
-name: SONIX Lavender KSUNext v1.1.1 TEST2
+name: SONIX Lavender KSUNext v1.1.1 TEST3
 
 on:
   push:
@@ -47,6 +47,11 @@ jobs:
             https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/v1.1.1/kernel/setup.sh \
             | bash -s v1.1.1
           test -d KernelSU-Next
+          # Linux 4.4 Sonix does not expose the path_umount backport insertion
+          # point expected by KSUNext v1.1.1. Keep legacy root/su but use
+          # NOUMOUNT mode so core_hook.c does not reference missing path_umount.
+          sed -i 's/^ccflags-y += -DKSU_UMOUNT$/# ccflags-y += -DKSU_UMOUNT  # legacy-4.4-NOUMOUNT/' KernelSU-Next/kernel/Makefile
+          grep -q 'legacy-4.4-NOUMOUNT' KernelSU-Next/kernel/Makefile
           grep -R "KSU_KPROBES_HOOK" -n KernelSU-Next/kernel/Kconfig | head
 
       - name: Apply Linux 4.4 manual hooks
@@ -74,7 +79,7 @@ jobs:
             -d KSU_DEBUG \
             -d KSU_ALLOWLIST_WORKAROUND \
             -d LOCALVERSION_AUTO \
-            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST2"
+            --set-str LOCALVERSION "-S0NiX-EAS-X2base-OldCam-KSUNext-v1.1.1-TEST3"
 
           make O=out ARCH=arm64 olddefconfig
 
@@ -138,7 +143,7 @@ jobs:
           ## osm0sis @ xda-developers
 
           properties() { '
-          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST2 by RIWUTZ
+          kernel.string=S0NiX X2-base OldCam + KernelSU Next v1.1.1 TEST3 by RIWUTZ
           do.devicecheck=0
           do.modules=0
           do.systemless=1
@@ -187,7 +192,7 @@ jobs:
           AK3
 
           mkdir -p dist
-          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip"
+          OUTZIP="$PWD/dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST3.zip"
           (
             cd AnyKernel3
             zip -qr9 "$OUTZIP" .
@@ -203,10 +208,10 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2
+          name: S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST3
           path: |
-            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip
-            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST2.zip.sha256
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST3.zip
+            dist/S0NiX-X2base-OldCam-KSUNext-v1.1.1-TEST3.zip.sha256
             dist/zip-list.txt
             source-info.txt
             config-check.txt
@@ -217,7 +222,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: S0NiX-Lavender-TEST2-logs
+          name: S0NiX-Lavender-TEST3-logs
           path: |
             build.log
             source-info.txt
