@@ -1,0 +1,25 @@
+name: RiwutOS11 SUSFS compatibility probe
+on:
+  push:
+    branches: [riwutos11-v3-diagnostic]
+    paths:
+      - 'riwutos11/susfs-probe.sh'
+      - '.github/workflows/riwutos11-susfs-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  susfs-patch-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check upstream SUSFS 4.14 patch against pinned XRadens source
+        run: bash riwutos11/susfs-probe.sh
+      - name: Publish findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RiwutOS11-SUSFS-PATCH-CHECK-NOT-FLASHABLE
+          path: |
+            output/susfs-patch-status.txt
+            output/susfs-patch-check.log
