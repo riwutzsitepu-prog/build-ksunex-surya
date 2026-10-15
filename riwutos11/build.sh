@@ -98,4 +98,22 @@ gzip -dc "$IMG" | strings > "$OUT/image-strings.txt"
 grep -Fq '4.14.355-RiwutOS11' "$OUT/image-strings.txt"
 cp "$IMG" "$OUT/Image.gz"
 sha256sum "$OUT/Image.gz" > "$OUT/sha256.txt"
+# Static readiness audit, independent of compilation success.
+python3 - <<'PY'
+from pathlib import Path
+src=Path('fs/exec.c').read_text()
+uid=Path('kernel/sys.c').read_text()
+reboot=Path('kernel/reboot.c').read_text()
+checks={
+  'manual_reboot_hook': 'ksu_handle_sys_reboot(magic1, magic2, cmd, &arg)' in reboot,
+  'manual_setresuid_hook': 'ksu_handle_setresuid(ksu_old_uid, ksu_new_uid)' in uid,
+  'manual_execve_sucompat_hook': 'ksu_handle_execve' in src,
+  'manual_execveat_sucompat_hook': 'ksu_handle_execveat_sucompat' in src,
+  'susfs_source': Path('fs/susfs.c').exists(),
+}
+out=Path('../output/readiness-audit.txt')
+out.write_text('RiwutOS11 STATIC READINESS AUDIT\\n'+''.join(f'{k}: {v}\\n' for k,v in checks.items())+'BOOT TEST: NOT PERFORMED\\nREADY TO FLASH: NO\\n')
+print(out.read_text())
+PY
+
 echo 'IMAGE.GZ COMPILED ONLY - DTB/DTBO NOT REBUILT - NOT FLASHABLE - SUSFS and boot validation missing' > "$OUT/STATUS.txt"
