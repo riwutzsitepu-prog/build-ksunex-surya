@@ -34,3 +34,18 @@ else
 fi
 cat "$ROOT/output/susfs-backport-check.log"
 echo "Backport result code: $BACKPORT_RC"
+
+# Isolated partial application: preserve clean hunks and capture only rejected sections.
+mkdir -p "$ROOT/output/susfs-partial-rejects"
+set +e
+git apply --reject --whitespace=nowarn "$ROOT/output/susfs-4.14-backport.patch" > "$ROOT/output/susfs-partial-apply.log" 2>&1
+PARTIAL_RC=$?
+set -e
+find . -name '*.rej' -type f | while read -r file; do
+  dst="$ROOT/output/susfs-partial-rejects/${file#./}"
+  mkdir -p "$(dirname "$dst")"
+  cp "$file" "$dst"
+done
+printf 'Partial apply status: %s\\n' "$PARTIAL_RC" > "$ROOT/output/susfs-partial-status.txt"
+find "$ROOT/output/susfs-partial-rejects" -type f | sort >> "$ROOT/output/susfs-partial-status.txt"
+echo 'PARTIAL PATCH IS DIAGNOSTIC ONLY. DO NOT FLASH.' >> "$ROOT/output/susfs-partial-status.txt"
