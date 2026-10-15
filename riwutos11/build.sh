@@ -27,6 +27,20 @@ CONFIG_KSU_MANUAL_HOOK=y
 CONFIG
 curl -fL --retry 3 -o "$OUT/ksu-setup.sh" https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh
 bash "$OUT/ksu-setup.sh" legacy
+python3 - <<'PY'
+from pathlib import Path
+p=Path('kernel/reboot.c')
+s=p.read_text()
+needle='SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,'
+assert s.count(needle)==1, 'Unexpected reboot syscall layout'
+assert 'ksu_handle_sys_reboot' not in s, 'Reboot hook already present'
+s=s.replace(needle, '#ifdef CONFIG_KSU\nextern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n#endif\n'+needle,1)
+needle2='\t/* We only trust the superuser with rebooting the system. */'
+assert s.count(needle2)==1
+s=s.replace(needle2, '#ifdef CONFIG_KSU\n\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n#endif\n'+needle2,1)
+p.write_text(s)
+print('KernelSU reboot manual hook installed')
+PY
 export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=riwut KBUILD_BUILD_HOST=RiwutOS11
 export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabihf-
 make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip surya_defconfig
