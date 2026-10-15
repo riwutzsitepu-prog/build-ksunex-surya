@@ -48,7 +48,7 @@ make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy 
 for k in CONFIG_KSU CONFIG_KSU_MANUAL_HOOK; do
   grep -qx "$k=y" "$OUT/obj/.config" || { echo "Missing $k" >&2; exit 4; }
 done
-make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip Image.gz dtbs
+make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip Image.gz
 IMG="$OUT/obj/arch/arm64/boot/Image.gz"
 test -s "$IMG"
 gzip -t "$IMG"
@@ -56,4 +56,4 @@ gzip -dc "$IMG" | strings > "$OUT/image-strings.txt"
 grep -Fq '4.14.355-RiwutOS11' "$OUT/image-strings.txt"
 cp "$IMG" "$OUT/Image.gz"
 sha256sum "$OUT/Image.gz" > "$OUT/sha256.txt"
-echo 'COMPILED ONLY - NOT FLASHABLE - SUSFS and boot validation missing' > "$OUT/STATUS.txt"
+echo 'IMAGE.GZ COMPILED ONLY - DTB/DTBO NOT REBUILT - NOT FLASHABLE - SUSFS and boot validation missing' > "$OUT/STATUS.txt"
