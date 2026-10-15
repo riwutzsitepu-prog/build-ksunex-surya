@@ -60,3 +60,45 @@ for target in fs/proc/cmdline.c fs/proc/task_mmu.c; do
     fs/proc/task_mmu.c) nl -ba "$target" | sed -n '390,530p' ;;
   esac
 done
+
+# Adapt only the two rejected hunks to the pinned XRadens 4.14 source.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('fs/proc/cmdline.c')
+s=p.read_text()
+anchor='static int cmdline_proc_show(struct seq_file *m, void *v)\n{\n'
+assert s.count(anchor)==1
+assert 'susfs_spoof_cmdline_or_bootconfig' not in s
+s=s.replace(anchor, '''#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+extern int susfs_spoof_cmdline_or_bootconfig(struct seq_file *m);
+#endif
+'''+anchor+'''#ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+\tif (!susfs_spoof_cmdline_or_bootconfig(m)) {
+\t\tseq_putc(m, '\\n');
+\t\treturn 0;
+\t}
+#endif
+''')
+p.write_text(s)
+p=Path('fs/proc/task_mmu.c')
+s=p.read_text()
+anchor='static void\nshow_map_vma(struct seq_file *m, struct vm_area_struct *vma, int is_pid)'
+assert s.count(anchor)==1
+assert 'extern void susfs_sus_ino_for_show_map_vma' not in s
+s=s.replace(anchor, '''#ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+extern void susfs_sus_ino_for_show_map_vma(unsigned long ino, dev_t *out_dev, unsigned long *out_ino);
+#endif
+
+'''+anchor)
+p.write_text(s)
+print('Adapted two rejected SUSFS declaration/cmdline hunks')
+PY
+# Check source-level integration only; not a boot or KernelSU API validation.
+python3 - <<'PY'
+from pathlib import Path
+assert 'susfs_spoof_cmdline_or_bootconfig(m)' in Path('fs/proc/cmdline.c').read_text()
+assert 'extern void susfs_sus_ino_for_show_map_vma' in Path('fs/proc/task_mmu.c').read_text()
+for p in ('fs/susfs.c','include/linux/susfs.h'):
+    print(p, 'exists:', Path(p).exists())
+print('SUSFS SOURCE PORT STAGED FOR COMPILE TEST; NOT FLASHABLE')
+PY
