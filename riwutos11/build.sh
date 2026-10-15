@@ -41,6 +41,20 @@ s=s.replace(needle2, '#ifdef CONFIG_KSU\n\tksu_handle_sys_reboot(magic1, magic2,
 p.write_text(s)
 print('KernelSU reboot manual hook installed')
 PY
+# Linux 4.14 XRadens does not export path_umount. Use the legacy sys_umount path.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('drivers/kernelsu/feature/kernel_umount.c')
+s=p.read_text()
+needle='#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) ||'
+assert s.count(needle)==1, 'Unexpected KernelSU unmount layout'
+s=s.replace(needle, '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) ||',1)
+# On this 4.14 source do not select the non-existent backported path_umount.
+s=s.replace('defined(KSU_HAS_PATH_UMOUNT)\nextern int path_umount', '(defined(KSU_HAS_PATH_UMOUNT) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0))\nextern int path_umount',1)
+assert 'defined(KSU_HAS_PATH_UMOUNT) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)' in s
+p.write_text(s)
+print('KernelSU legacy 4.14 umount compatibility applied')
+PY
 export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=riwut KBUILD_BUILD_HOST=RiwutOS11
 export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabihf-
 make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip surya_defconfig
