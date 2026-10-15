@@ -49,3 +49,14 @@ done
 printf 'Partial apply status: %s\\n' "$PARTIAL_RC" > "$ROOT/output/susfs-partial-status.txt"
 find "$ROOT/output/susfs-partial-rejects" -type f | sort >> "$ROOT/output/susfs-partial-status.txt"
 echo 'PARTIAL PATCH IS DIAGNOSTIC ONLY. DO NOT FLASH.' >> "$ROOT/output/susfs-partial-status.txt"
+
+# Print only remaining rejected hunks plus local source context for precise porting.
+for target in fs/proc/cmdline.c fs/proc/task_mmu.c; do
+  echo "===== REJECT: $target ====="
+  if [ -f "$target.rej" ]; then cat "$target.rej"; else echo "No reject file"; fi
+  echo "===== SOURCE CONTEXT: $target ====="
+  case "$target" in
+    fs/proc/cmdline.c) nl -ba "$target" | sed -n '35,125p' ;;
+    fs/proc/task_mmu.c) nl -ba "$target" | sed -n '390,530p' ;;
+  esac
+done
