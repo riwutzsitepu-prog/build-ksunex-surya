@@ -41,6 +41,32 @@ s=s.replace(needle2, '#ifdef CONFIG_KSU\n\tksu_handle_sys_reboot(magic1, magic2,
 p.write_text(s)
 print('KernelSU reboot manual hook installed')
 PY
+# Manual KernelSU UID transition hook: run only after successful credentials commit.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('kernel/sys.c')
+s=p.read_text()
+start=s.index('SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)')
+end=s.index('\nerror:', start)
+block=s[start:end]
+old='\treturn commit_creds(new);'
+assert block.count(old)==1, 'Unexpected setresuid success path'
+assert 'ksu_handle_setresuid' not in block
+block=block.replace(old, '''\t{
+\t\tuid_t ksu_old_uid = from_kuid_munged(current_user_ns(), old->uid);
+\t\tuid_t ksu_new_uid = from_kuid_munged(current_user_ns(), new->uid);
+\t\tretval = commit_creds(new);
+#ifdef CONFIG_KSU
+\t\tif (retval == 0)
+\t\t\tksu_handle_setresuid(ksu_old_uid, ksu_new_uid);
+#endif
+\t\treturn retval;
+\t}''', 1)
+s=s[:start]+block+s[end:]
+s=s.replace('SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)', '#ifdef CONFIG_KSU\nextern int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);\n#endif\nSYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)',1)
+p.write_text(s)
+print('KernelSU setresuid manual hook installed')
+PY
 # Linux 4.14 XRadens does not export path_umount. Use the legacy sys_umount path.
 python3 - <<'PY'
 from pathlib import Path
