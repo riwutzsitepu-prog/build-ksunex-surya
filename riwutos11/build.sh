@@ -16,14 +16,14 @@ grep -qx 'SUBLEVEL = 355' Makefile
 sed -i -E 's/^EXTRAVERSION =.*/EXTRAVERSION =/' Makefile
 CFG=arch/arm64/configs/surya_defconfig
 test -s "$CFG"
-sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_LOCALVERSION_AUTO=/d;/^# CONFIG_LOCALVERSION_AUTO is not set/d;/^CONFIG_KSU=/d;/^CONFIG_KSU_KPROBE_HOOKS=/d;/^CONFIG_KPROBES=/d;/^CONFIG_KPROBE_EVENTS=/d' "$CFG"
+sed -i '/^CONFIG_LOCALVERSION=/d;/^CONFIG_LOCALVERSION_AUTO=/d;/^# CONFIG_LOCALVERSION_AUTO is not set/d;/^CONFIG_KSU=/d;/^CONFIG_KSU_MANUAL_HOOK=/d;/^CONFIG_KPROBES=/d;/^CONFIG_KPROBE_EVENTS=/d' "$CFG"
 cat >> "$CFG" <<'CONFIG'
 CONFIG_LOCALVERSION="-RiwutOS11"
 # CONFIG_LOCALVERSION_AUTO is not set
 CONFIG_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 CONFIG_KSU=y
-CONFIG_KSU_KPROBE_HOOKS=y
+CONFIG_KSU_MANUAL_HOOK=y
 CONFIG
 curl -fL --retry 3 -o "$OUT/ksu-setup.sh" https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh
 bash "$OUT/ksu-setup.sh" legacy
@@ -31,7 +31,7 @@ export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=riwut KBUILD_BUILD_HOST=RiwutO
 export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabihf-
 make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip surya_defconfig
 make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip olddefconfig
-for k in CONFIG_KSU CONFIG_KPROBES CONFIG_KSU_KPROBE_HOOKS; do
+for k in CONFIG_KSU CONFIG_KSU_MANUAL_HOOK; do
   grep -qx "$k=y" "$OUT/obj/.config" || { echo "Missing $k" >&2; exit 4; }
 done
 make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip Image.gz dtbs
