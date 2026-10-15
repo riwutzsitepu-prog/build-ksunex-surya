@@ -23,3 +23,5 @@ jobs:
           path: |
             output/susfs-patch-status.txt
             output/susfs-patch-check.log
+            output/susfs-backport-status.txt
+            output/susfs-backport-check.log
