@@ -1,0 +1,38 @@
+name: RiwutOS11 V3 compile diagnostic
+on:
+  push:
+    branches: [riwutos11-v3-diagnostic]
+    paths:
+      - 'riwutos11/**'
+      - '.github/workflows/riwutos11-v3.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl bc bison flex make libssl-dev libelf-dev python3 clang lld llvm binutils gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf ccache zip
+      - name: Diagnostic compile
+        shell: bash
+        run: |
+          set -o pipefail
+          bash riwutos11/build.sh 2>&1 | tee riwutos11-build.log
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RiwutOS11-V3-DIAGNOSTIC-NOT-FLASHABLE
+          path: |
+            riwutos11-build.log
+            output/STATUS.txt
+            output/source-commit.txt
+            output/obj/.config
+            output/Image.gz
+            output/sha256.txt
+          if-no-files-found: warn
