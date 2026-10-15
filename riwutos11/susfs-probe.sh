@@ -19,3 +19,18 @@ else
 fi
 cat "$ROOT/output/susfs-patch-check.log"
 echo "Result code: $RC"
+
+
+# Compare another independent 4.14 backport without modifying kernel source.
+curl -fL --retry 3 -o "$ROOT/output/susfs-4.14-backport.patch" "https://raw.githubusercontent.com/devnoname120/susfs4ksu-toco/kernel-4.14-backport/kernel_patches/50_add_susfs_in_kernel-4.14.patch"
+set +e
+git apply --check "$ROOT/output/susfs-4.14-backport.patch" > "$ROOT/output/susfs-backport-check.log" 2>&1
+BACKPORT_RC=$?
+set -e
+if [ "$BACKPORT_RC" -eq 0 ]; then
+  echo 'Alternative 4.14 backport applies cleanly (NOT integrated)' | tee "$ROOT/output/susfs-backport-status.txt"
+else
+  echo 'Alternative 4.14 backport needs adaptation (NOT integrated)' | tee "$ROOT/output/susfs-backport-status.txt"
+fi
+cat "$ROOT/output/susfs-backport-check.log"
+echo "Backport result code: $BACKPORT_RC"
