@@ -35,4 +35,5 @@ jobs:
             output/obj/.config
             output/Image.gz
             output/sha256.txt
+            output/readiness-audit.txt
           if-no-files-found: warn
