@@ -52,6 +52,8 @@ s=s.replace(needle, '#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0) ||',1)
 # On this 4.14 source do not select the non-existent backported path_umount.
 s=s.replace('defined(KSU_HAS_PATH_UMOUNT)\nextern int path_umount', '(defined(KSU_HAS_PATH_UMOUNT) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0))\nextern int path_umount',1)
 assert 'defined(KSU_HAS_PATH_UMOUNT) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)' in s
+s=s.replace('#ifndef KSU_HAS_PATH_UMOUNT\n#include <linux/syscalls.h>\n#endif', '#include <linux/syscalls.h>', 1)
+assert '#include <linux/syscalls.h>' in s
 p.write_text(s)
 print('KernelSU legacy 4.14 umount compatibility applied')
 PY
