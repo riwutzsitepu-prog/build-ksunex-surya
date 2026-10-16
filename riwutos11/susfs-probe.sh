@@ -236,3 +236,30 @@ with (outdir/'susfs-ksu-api-audit.txt').open('w') as out:
     print('STATIC INSPECTION ONLY; SUSFS NOT COMPILED OR ENABLED',file=out)
 print((outdir/'susfs-ksu-api-audit.txt').read_text())
 PY
+
+# Stage only the SUSFS Kconfig switch in the disposable KernelSU Next checkout.
+# This is NOT the full legacy SUSFS patch and cannot enable SUSFS functionality.
+python3 - <<'PY'
+from pathlib import Path
+import os
+p=Path('Kconfig')
+s=p.read_text()
+assert s.rstrip().endswith('endmenu'), 'KernelSU Kconfig layout changed'
+assert 'config KSU_SUSFS' not in s, 'SUSFS already defined; stop rather than duplicate'
+anchor='\nendmenu'
+addition='''
+config KSU_SUSFS
+    bool "KernelSU SUSFS compatibility (experimental)"
+    depends on KSU
+    default n
+    help
+      Select SUSFS integration after porting its KernelSU hooks.
+      Keep disabled until the integration build passes.
+'''
+pos=s.rfind(anchor)
+s=s[:pos]+'\n'+addition+s[pos:]
+p.write_text(s)
+out=Path(os.environ['SUSFS_PROBE_ROOT'])/'output'/'susfs-ksu-kconfig-stage.txt'
+out.write_text('KSU_SUSFS Kconfig entry staged in disposable KernelSU clone; default n; no SUSFS integration or boot validation.\n')
+print(out.read_text())
+PY
