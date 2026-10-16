@@ -102,3 +102,15 @@ for p in ('fs/susfs.c','include/linux/susfs.h'):
     print(p, 'exists:', Path(p).exists())
 print('SUSFS SOURCE PORT STAGED FOR COMPILE TEST; NOT FLASHABLE')
 PY
+
+# Stage the two required SUSFS core files from the matching 4.14 backport.
+SUSFS_URL="https://raw.githubusercontent.com/devnoname120/susfs4ksu-toco/kernel-4.14-backport/kernel_patches"
+mkdir -p fs include/linux
+curl -fL --retry 3 -o fs/susfs.c "$SUSFS_URL/fs/susfs.c"
+curl -fL --retry 3 -o include/linux/susfs.h "$SUSFS_URL/include/linux/susfs.h"
+test -s fs/susfs.c && test -s include/linux/susfs.h
+grep -q 'susfs_' fs/susfs.c
+grep -q 'susfs_' include/linux/susfs.h
+printf 'Core SUSFS files present; compile/integration NOT YET TESTED\\n' > "$ROOT/output/susfs-core-status.txt"
+wc -c fs/susfs.c include/linux/susfs.h | tee -a "$ROOT/output/susfs-core-status.txt"
+git diff --check > "$ROOT/output/susfs-diff-check.txt" 2>&1
