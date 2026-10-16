@@ -121,3 +121,21 @@ set -e
 printf 'git diff --check exit code: %s\\n' "$DIFF_RC" >> "$ROOT/output/susfs-core-status.txt"
 cat "$ROOT/output/susfs-diff-check.txt"
 echo 'Source acquisition verified; not yet a compiled SUSFS kernel.'
+
+# Normalize only newly introduced whitespace in patched namespace lines and audit build wiring.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('fs/namespace.c')
+s=p.read_text()
+s='\n'.join(line.rstrip(' \t') for line in s.split('\n'))
+p.write_text(s)
+print('Normalized whitespace in fs/namespace.c for SUSFS source staging')
+for p in ('fs/Makefile','fs/Kconfig','drivers/kernelsu/Kbuild','drivers/kernelsu/Kconfig'):
+    f=Path(p)
+    if f.exists():
+        txt=f.read_text()
+        print(p, 'SUSFS mentions:',txt.count('SUSFS'),'susfs.c build target:', 'susfs.o' in txt)
+print('STAGING ONLY: not integrated with KernelSU and not boot-tested')
+PY
+git diff --check > "$ROOT/output/susfs-diff-check-after-cleanup.txt" 2>&1 || true
+cat "$ROOT/output/susfs-diff-check-after-cleanup.txt"
