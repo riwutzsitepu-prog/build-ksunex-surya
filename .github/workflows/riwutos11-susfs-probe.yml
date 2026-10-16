@@ -51,4 +51,5 @@ jobs:
             output/susfs-object-status.txt
             output/susfs-undefined-symbols.txt
             output/susfs-link-preflight-status.txt
+            output/susfs-object-content-audit.txt
             output/susfs-partial-rejects/
