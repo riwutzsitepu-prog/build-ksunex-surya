@@ -384,3 +384,20 @@ REPORT="$ROOT/output/susfs-object-content-audit.txt"
   grep -E '^(CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' "$ROOT/output/susfs-enabled-obj/.config" || true
   echo 'AUDIT ONLY; full kernel linking and on-device boot remain untested.'
 } | tee "$REPORT"
+
+# Isolated full link attempt: test build wiring, not a flashable image.
+# Existing primary diagnostic kernel source and artifacts remain unchanged.
+cd "$ROOT/riwutos11-susfs-probe"
+set +e
+make -j2 O="$ROOT/output/susfs-enabled-obj" ARCH=arm64 CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump CROSS_COMPILE=aarch64-linux-gnu- Image.gz > "$ROOT/output/susfs-full-link.log" 2>&1
+LINK_RC=$?
+set -e
+{
+  printf 'Full kernel build/link exit code: %s\n' "$LINK_RC"
+  if [ "$LINK_RC" -eq 0 ]; then
+    echo 'Experimental image built; NOT FLASHABLE; no DTB or boot validation.'
+  else
+    echo 'First compiler/linker failures:'
+    grep -m 15 -E '(fatal error:|error:|undefined reference|No rule to make target|Error [0-9])' "$ROOT/output/susfs-full-link.log" || tail -n 25 "$ROOT/output/susfs-full-link.log"
+  fi
+} | tee "$ROOT/output/susfs-full-link-status.txt"
