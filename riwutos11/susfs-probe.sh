@@ -173,7 +173,7 @@ echo "PROBE ONLY: no KernelSU integration or boot validation" >> "$ROOT/output/s
 python3 - <<'PY'
 from pathlib import Path
 import re
-patch=Path('../output/susfs-ksu-backport.patch').read_text()
+patch=Path('../../output/susfs-ksu-backport.patch').read_text()
 target=Path('.')
 paths=re.findall(r'^diff --git a/(\S+) b/',patch,re.M)
 with Path('../../output/susfs-ksu-layout-map.txt').open('w') as out:
@@ -183,5 +183,5 @@ with Path('../../output/susfs-ksu-layout-map.txt').open('w') as out:
         exists=(target/rel).exists()
         print(f'{rel}: {"PRESENT" if exists else "MISSING"}',file=out)
     print('Old KernelSU patch is not applied to KernelSU Next.',file=out)
-print(Path('../output/susfs-ksu-layout-map.txt').read_text())
+print(Path('../../output/susfs-ksu-layout-map.txt').read_text())
 PY
