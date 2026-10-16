@@ -385,6 +385,24 @@ REPORT="$ROOT/output/susfs-object-content-audit.txt"
   echo 'AUDIT ONLY; full kernel linking and on-device boot remain untested.'
 } | tee "$REPORT"
 
+# Match the already compiled diagnostic reboot hook inside the disposable integration tree.
+# This is only one manual hook and does not establish full KernelSU root support.
+cd "$ROOT/riwutos11-susfs-probe"
+python3 - <<'PY'
+from pathlib import Path
+p=Path('kernel/reboot.c')
+s=p.read_text()
+needle='SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,'
+assert s.count(needle)==1
+assert 'ksu_handle_sys_reboot' not in s
+s=s.replace(needle, '#ifdef CONFIG_KSU\nextern int ksu_handle_sys_reboot(int magic1, int magic2, unsigned int cmd, void __user **arg);\n#endif\n'+needle,1)
+hook='\t/* We only trust the superuser with rebooting the system. */'
+assert s.count(hook)==1
+s=s.replace(hook, '#ifdef CONFIG_KSU\n\tksu_handle_sys_reboot(magic1, magic2, cmd, &arg);\n#endif\n'+hook,1)
+p.write_text(s)
+print('Isolated manual reboot hook installed; other hooks still unverified')
+PY
+
 # Isolated full link attempt: test build wiring, not a flashable image.
 # Existing primary diagnostic kernel source and artifacts remain unchanged.
 cd "$ROOT/riwutos11-susfs-probe"
