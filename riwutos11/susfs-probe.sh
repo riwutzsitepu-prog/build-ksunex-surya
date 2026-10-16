@@ -331,3 +331,14 @@ fi
 # Expose compiler failure context in Actions output (not just downloadable artifacts).
 echo '===== SUSFS FIRST COMPILER DIAGNOSTICS ====='
 grep -n -m 8 -B 5 -A 9 -E '(fatal error:|error:|No rule to make target)' "$ROOT/output/susfs-object-build.log" || tail -n 55 "$ROOT/output/susfs-object-build.log"
+
+# Inspect unresolved symbols in the successfully compiled SUSFS object.
+# This does not assert a full kernel link or working KernelSU SUSFS handlers.
+if [ -s "$ROOT/output/susfs-enabled-obj/fs/susfs.o" ]; then
+  llvm-nm -u "$ROOT/output/susfs-enabled-obj/fs/susfs.o" > "$ROOT/output/susfs-undefined-symbols.txt"
+  printf 'SUSFS undefined-symbol audit: %s external references\n' "$(wc -l < "$ROOT/output/susfs-undefined-symbols.txt")" | tee "$ROOT/output/susfs-link-preflight-status.txt"
+  grep -E '(susfs|ksu)' "$ROOT/output/susfs-undefined-symbols.txt" | tee -a "$ROOT/output/susfs-link-preflight-status.txt" || true
+  echo 'EXTERNAL SYMBOL INVENTORY ONLY; FULL KERNEL LINK NOT TESTED.' >> "$ROOT/output/susfs-link-preflight-status.txt"
+else
+  echo 'SUSFS object unavailable; cannot audit unresolved symbols' > "$ROOT/output/susfs-link-preflight-status.txt"
+fi
