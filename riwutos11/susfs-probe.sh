@@ -326,3 +326,7 @@ if [ "$OBJ_RC" -eq 0 ]; then
 else
   grep -m 15 -E '(fatal error:|error:|No rule to make target)' "$ROOT/output/susfs-object-build.log" | tee -a "$ROOT/output/susfs-object-status.txt" || true
 fi
+
+# Expose compiler failure context in Actions output (not just downloadable artifacts).
+echo '===== SUSFS FIRST COMPILER DIAGNOSTICS ====='
+grep -n -m 8 -B 5 -A 9 -E '(fatal error:|error:|No rule to make target)' "$ROOT/output/susfs-object-build.log" || tail -n 55 "$ROOT/output/susfs-object-build.log"
