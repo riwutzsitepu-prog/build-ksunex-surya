@@ -293,6 +293,10 @@ PY
 # Validate the staged SUSFS option using the kernel's real Kconfig parser.
 # This remains a disposable source tree, and SUSFS is not enabled for boot.
 cp -a "$ROOT/riwutos11-ksunext-probe/kernel" "$ROOT/riwutos11-susfs-probe/drivers/kernelsu" 2>/dev/null || true
+# KernelSU Next includes uapi/app_profile.h from its repository root.
+test -s "$ROOT/riwutos11-ksunext-probe/uapi/app_profile.h"
+cp -a "$ROOT/riwutos11-ksunext-probe/uapi" "$ROOT/riwutos11-susfs-probe/drivers/kernelsu/uapi"
+test -s "$ROOT/riwutos11-susfs-probe/drivers/kernelsu/uapi/app_profile.h"
 cd "$ROOT/riwutos11-susfs-probe"
 python3 - <<'PY'
 from pathlib import Path
