@@ -342,3 +342,20 @@ if [ -s "$ROOT/output/susfs-enabled-obj/fs/susfs.o" ]; then
 else
   echo 'SUSFS object unavailable; cannot audit unresolved symbols' > "$ROOT/output/susfs-link-preflight-status.txt"
 fi
+
+# Confirm that the object contains actual SUSFS implementation, not an empty stub.
+OBJ="$ROOT/output/susfs-enabled-obj/fs/susfs.o"
+REPORT="$ROOT/output/susfs-object-content-audit.txt"
+{
+  echo "Object byte size: $(wc -c < "$OBJ")"
+  echo "All symbols: $(llvm-nm "$OBJ" | wc -l)"
+  echo "Defined global symbols: $(llvm-nm --defined-only --extern-only "$OBJ" | wc -l)"
+  echo "Undefined symbols: $(llvm-nm -u "$OBJ" | wc -l)"
+  echo 'Sample exported SUSFS functions:'
+  llvm-nm --defined-only --extern-only "$OBJ" | grep -m 20 -i susfs || true
+  echo 'Object sections:'
+  llvm-objdump -h "$OBJ" | head -n 30
+  echo 'Selected SUSFS feature options:'
+  grep -E '^(CONFIG_KSU_SUSFS|# CONFIG_KSU_SUSFS)' "$ROOT/output/susfs-enabled-obj/.config" || true
+  echo 'AUDIT ONLY; full kernel linking and on-device boot remain untested.'
+} | tee "$REPORT"
