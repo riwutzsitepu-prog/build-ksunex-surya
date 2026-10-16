@@ -36,6 +36,23 @@ jobs:
           grep -Fxq 'manual_execveat_sucompat_hook: False' output/readiness-audit.txt
           gzip -t output/Image.gz
           sha256sum -c output/sha256.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import gzip
+          image=Path('output/Image.gz')
+          with gzip.open(image,'rb') as stream:
+              header=stream.read(0x40)
+          assert len(header)==0x40, 'Truncated ARM64 Image header'
+          magic=int.from_bytes(header[0x38:0x3c], 'little')
+          assert magic==0x644d5241, f'Invalid ARM64 Image magic: 0x{magic:08x}'
+          size=int.from_bytes(header[0x10:0x18], 'little')
+          assert size>0, 'Invalid ARM64 Image header size'
+          print(f'PASS: ARM64 Image header magic, declared size {size} bytes')
+          expected='81d2f9e9aa231fa3467c190e88e6c94fb76ccaa7'
+          recorded=Path('output/source-commit.txt').read_text()
+          assert expected in recorded, 'Kernel source pin does not match expected commit'
+          print('PASS: Pinned surya source commit recorded')
+          PY
           echo 'PASS: Base kernel image is a verified diagnostic artifact only.'
       - name: Publish integration blockers
         shell: bash
