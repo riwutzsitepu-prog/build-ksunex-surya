@@ -1,4 +1,4 @@
-name: RiwutOS11 V3 compile diagnostic
+name: RiwutOS11 4.14.355 without SUSFS
 on:
   push:
     branches: [riwutos11-v3-diagnostic]
@@ -36,6 +36,11 @@ jobs:
           grep -Fxq 'manual_execveat_sucompat_hook: False' output/readiness-audit.txt
           gzip -t output/Image.gz
           sha256sum -c output/sha256.txt
+          test -s output/dtb-status.txt
+          test -s output/dtb-sha256.txt
+          sha256sum -c output/dtb-sha256.txt
+          echo 'PASS: Device tree blobs built and hashed; no boot validation.'
+
           python3 - <<'PY'
           from pathlib import Path
           import gzip
@@ -96,6 +101,9 @@ jobs:
             output/obj/.config
             output/Image.gz
             output/sha256.txt
+            output/dtb-status.txt
+            output/dtb-sha256.txt
+            output/dtb/
             output/readiness-audit.txt
             output/integration-gaps.txt
           if-no-files-found: warn
