@@ -112,7 +112,7 @@ checks={
   'susfs_source': Path('fs/susfs.c').exists(),
 }
 out=Path('../output/readiness-audit.txt')
-out.write_text('RiwutOS11 STATIC READINESS AUDIT\\n'+''.join(f'{k}: {v}\\n' for k,v in checks.items())+'BOOT TEST: NOT PERFORMED\\nREADY TO FLASH: NO\\n')
+out.write_text('RiwutOS11 STATIC READINESS AUDIT\n'+''.join(f'{k}: {v}\n' for k,v in checks.items())+'BOOT TEST: NOT PERFORMED\nREADY TO FLASH: NO\n')
 print(out.read_text())
 PY
 
