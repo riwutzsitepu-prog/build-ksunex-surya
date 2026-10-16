@@ -36,4 +36,5 @@ jobs:
             output/susfs-ksu-layout-map.txt
             output/susfs-ksu-relocation-map.txt
             output/susfs-ksu-api-audit.txt
+            output/susfs-ksu-kconfig-stage.txt
             output/susfs-partial-rejects/
