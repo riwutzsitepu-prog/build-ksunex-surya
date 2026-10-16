@@ -63,9 +63,9 @@ jobs:
           Path('output/integration-gaps.txt').write_text('\n'.join(report)+'\n')
           print('\n'.join(report))
           summary=Path(__import__('os').environ.get('GITHUB_STEP_SUMMARY','output/integration-summary.md'))
-          summary.write_text('## RiwutOS11 — Diagnostic build only\\n\\n'
-                             + '\\n'.join('- '+item for item in outstanding)
-                             + '\\n\\n**Not flashable:** full integration, linking, and boot validation are outstanding.\\n')
+          summary.write_text('## RiwutOS11 — Diagnostic build only\n\n'
+                             + '\n'.join('- '+item for item in outstanding)
+                             + '\n\n**Not flashable:** full integration, linking, and boot validation are outstanding.\n')
           PY
       - name: Upload build diagnostics
         if: always()
