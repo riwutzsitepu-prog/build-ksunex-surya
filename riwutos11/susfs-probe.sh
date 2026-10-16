@@ -312,3 +312,17 @@ if [ "$ENABLED_RC" -eq 0 ]; then
   grep -E '^CONFIG_KSU=|^CONFIG_KSU_SUSFS=|^# CONFIG_KSU_SUSFS' "$ROOT/output/susfs-enabled-obj/.config" | tee -a "$ROOT/output/susfs-enabled-status.txt" || true
 fi
 echo 'Configuration validation only, not compiled or boot-tested.' >> "$ROOT/output/susfs-enabled-status.txt"
+
+# Compile only SUSFS object to expose source integration errors, no full rebuild.
+cd "$ROOT/riwutos11-susfs-probe"
+set +e
+make -j2 O="$ROOT/output/susfs-enabled-obj" ARCH=arm64 CC=clang LD=ld.lld CROSS_COMPILE=aarch64-linux-gnu- fs/susfs.o > "$ROOT/output/susfs-object-build.log" 2>&1
+OBJ_RC=$?
+set -e
+printf 'SUSFS object compile exit code: %s\n' "$OBJ_RC" | tee "$ROOT/output/susfs-object-status.txt"
+if [ "$OBJ_RC" -eq 0 ]; then
+  test -s "$ROOT/output/susfs-enabled-obj/fs/susfs.o" || { echo 'Object missing despite successful make' >&2; exit 8; }
+  echo 'SUSFS OBJECT COMPILED, BUT NO LINK OR BOOT VALIDATION' >> "$ROOT/output/susfs-object-status.txt"
+else
+  grep -m 15 -E '(fatal error:|error:|No rule to make target)' "$ROOT/output/susfs-object-build.log" | tee -a "$ROOT/output/susfs-object-status.txt" || true
+fi
