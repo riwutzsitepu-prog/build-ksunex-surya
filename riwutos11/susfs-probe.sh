@@ -139,3 +139,21 @@ print('STAGING ONLY: not integrated with KernelSU and not boot-tested')
 PY
 git diff --check > "$ROOT/output/susfs-diff-check-after-cleanup.txt" 2>&1 || true
 cat "$ROOT/output/susfs-diff-check-after-cleanup.txt"
+
+# Locate actual SUSFS Kconfig ownership: upstream patch targets KernelSU Kconfig, not fs/Kconfig.
+python3 - <<'PY'
+from pathlib import Path
+out=Path('../output/susfs-kconfig-audit.txt')
+source=Path('../output/susfs-ksu-backport.patch')
+import urllib.request
+url='https://raw.githubusercontent.com/devnoname120/susfs4ksu-toco/kernel-4.14-backport/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch'
+source.write_bytes(urllib.request.urlopen(url,timeout=45).read())
+txt=source.read_text()
+checks={'kernel_susfs_Kconfig_patch': 'config KSU_SUSFS' in txt,
+        'kernel_susfs_Makefile_patch': 'diff --git a/kernel/Makefile' in txt,
+        'fs_susfs_target': 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' in Path('fs/Makefile').read_text()}
+out.write_text('\n'.join(f'{k}: {v}' for k,v in checks.items())+
+               '\nSUSFS KernelSU patch is NOT yet applied.\n')
+print(out.read_text())
+assert all(checks.values())
+PY
