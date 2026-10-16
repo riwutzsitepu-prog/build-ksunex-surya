@@ -49,4 +49,6 @@ jobs:
             output/susfs-enabled-status.txt
             output/susfs-object-build.log
             output/susfs-object-status.txt
+            output/susfs-undefined-symbols.txt
+            output/susfs-link-preflight-status.txt
             output/susfs-partial-rejects/
