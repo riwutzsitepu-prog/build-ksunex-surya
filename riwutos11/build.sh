@@ -99,12 +99,13 @@ grep -Fq '4.14.355-RiwutOS11' "$OUT/image-strings.txt"
 cp "$IMG" "$OUT/Image.gz"
 sha256sum "$OUT/Image.gz" > "$OUT/sha256.txt"
 # Build device trees separately, without replacing a known-good boot partition.
-make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip dtbs
+# Build the confirmed base DTB independently; device overlays remain unvalidated.
+make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip arch/arm64/boot/dts/qcom/sdmmagpie.dtb
 mkdir -p "$OUT/dtb"
 find "$OUT/obj/arch/arm64/boot/dts" -type f -name '*.dtb' -exec cp --parents {} "$OUT/dtb/" \;
 DTB_COUNT=$(find "$OUT/dtb" -type f -name '*.dtb' | wc -l)
 test "$DTB_COUNT" -gt 0 || { echo "No compiled DTBs found" >&2; exit 7; }
-printf 'DTB files built: %s\n' "$DTB_COUNT" > "$OUT/dtb-status.txt"
+printf 'Base DTB files built: %s (overlay DTBO not validated)\n' "$DTB_COUNT" > "$OUT/dtb-status.txt"
 find "$OUT/dtb" -type f -name '*.dtb' -print0 | sort -z | xargs -0 sha256sum > "$OUT/dtb-sha256.txt"
 
 # Static readiness audit, independent of compilation success.
