@@ -39,4 +39,6 @@ jobs:
             output/susfs-ksu-kconfig-stage.txt
             output/susfs-config-test.log
             output/susfs-config-test-status.txt
+            output/susfs-enabled-config.log
+            output/susfs-enabled-status.txt
             output/susfs-partial-rejects/
