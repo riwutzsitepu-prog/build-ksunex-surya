@@ -35,4 +35,5 @@ jobs:
             output/susfs-ksu-compat-status.txt
             output/susfs-ksu-layout-map.txt
             output/susfs-ksu-relocation-map.txt
+            output/susfs-ksu-api-audit.txt
             output/susfs-partial-rejects/
