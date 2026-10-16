@@ -27,4 +27,6 @@ jobs:
             output/susfs-backport-check.log
             output/susfs-partial-apply.log
             output/susfs-partial-status.txt
+            output/susfs-core-status.txt
+            output/susfs-diff-check.txt
             output/susfs-partial-rejects/
