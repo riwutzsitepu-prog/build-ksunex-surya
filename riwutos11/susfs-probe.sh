@@ -157,3 +157,14 @@ out.write_text('\n'.join(f'{k}: {v}' for k,v in checks.items())+
 print(out.read_text())
 assert all(checks.values())
 PY
+
+# Probe SUSFS KernelSU patch independently against the actual KernelSU Next legacy branch.
+git clone --depth 1 --branch legacy https://github.com/KernelSU-Next/KernelSU-Next.git "$ROOT/riwutos11-ksunext-probe"
+cd "$ROOT/riwutos11-ksunext-probe/kernel"
+set +e
+git apply --check "$ROOT/output/susfs-ksu-backport.patch" > "$ROOT/output/susfs-ksu-compat.log" 2>&1
+KSU_PATCH_RC=$?
+set -e
+echo "KernelSU Next legacy SUSFS patch compatibility exit code: $KSU_PATCH_RC" | tee "$ROOT/output/susfs-ksu-compat-status.txt"
+cat "$ROOT/output/susfs-ksu-compat.log"
+echo "PROBE ONLY: no KernelSU integration or boot validation" >> "$ROOT/output/susfs-ksu-compat-status.txt"
