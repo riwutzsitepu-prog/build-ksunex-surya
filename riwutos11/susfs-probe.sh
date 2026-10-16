@@ -256,6 +256,11 @@ config KSU_SUSFS
     help
       Select SUSFS integration after porting its KernelSU hooks.
       Keep disabled until the integration build passes.
+
+config KSU_SUSFS_SPOOF_UNAME
+    bool "SUSFS uname hook isolated compile probe"
+    depends on KSU_SUSFS
+    default n
 '''
 pos=s.rfind(anchor)
 s=s[:pos]+'\n'+addition+s[pos:]
@@ -303,7 +308,7 @@ echo 'CONFIG TEST ONLY. SUSFS NOT ENABLED OR BOOT TESTED.' >> "$ROOT/output/susf
 # This does not alter the primary kernel build or produce a flashable image.
 cd "$ROOT/riwutos11-susfs-probe"
 sed -i '/^# CONFIG_KSU_SUSFS is not set/d' arch/arm64/configs/surya_defconfig
-printf '\nCONFIG_KSU_SUSFS=y\n' >> arch/arm64/configs/surya_defconfig
+printf '\nCONFIG_KSU_SUSFS=y\nCONFIG_KSU_SUSFS_SPOOF_UNAME=y\n' >> arch/arm64/configs/surya_defconfig
 set +e
 make O="$ROOT/output/susfs-enabled-obj" ARCH=arm64 surya_defconfig > "$ROOT/output/susfs-enabled-config.log" 2>&1
 ENABLED_RC=$?
