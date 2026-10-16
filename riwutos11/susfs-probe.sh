@@ -108,11 +108,12 @@ SUSFS_URL="https://raw.githubusercontent.com/devnoname120/susfs4ksu-toco/kernel-
 mkdir -p fs include/linux
 curl -fL --retry 3 -o fs/susfs.c "$SUSFS_URL/fs/susfs.c"
 curl -fL --retry 3 -o include/linux/susfs.h "$SUSFS_URL/include/linux/susfs.h"
-test -s fs/susfs.c && test -s include/linux/susfs.h
+curl -fL --retry 3 -o include/linux/susfs_def.h "$SUSFS_URL/include/linux/susfs_def.h"
+test -s fs/susfs.c && test -s include/linux/susfs.h && test -s include/linux/susfs_def.h
 grep -q 'susfs_' fs/susfs.c
 grep -q 'susfs_' include/linux/susfs.h
 printf 'Core SUSFS files present; compile/integration NOT YET TESTED\\n' > "$ROOT/output/susfs-core-status.txt"
-wc -c fs/susfs.c include/linux/susfs.h | tee -a "$ROOT/output/susfs-core-status.txt"
+wc -c fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h | tee -a "$ROOT/output/susfs-core-status.txt"
 # Rejected patch diagnostic can leave malformed/whitespace contexts; capture instead of aborting.
 set +e
 git diff --check > "$ROOT/output/susfs-diff-check.txt" 2>&1
