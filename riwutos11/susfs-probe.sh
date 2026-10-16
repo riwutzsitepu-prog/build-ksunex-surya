@@ -276,6 +276,11 @@ config KSU_SUSFS_SUS_PATH
     bool "SUSFS path feature isolated compile probe"
     depends on KSU_SUSFS
     default n
+
+config KSU_SUSFS_OPEN_REDIRECT
+    bool "SUSFS open redirect isolated compile probe"
+    depends on KSU_SUSFS
+    default n
 '''
 pos=s.rfind(anchor)
 s=s[:pos]+'\n'+addition+s[pos:]
@@ -323,7 +328,7 @@ echo 'CONFIG TEST ONLY. SUSFS NOT ENABLED OR BOOT TESTED.' >> "$ROOT/output/susf
 # This does not alter the primary kernel build or produce a flashable image.
 cd "$ROOT/riwutos11-susfs-probe"
 sed -i '/^# CONFIG_KSU_SUSFS is not set/d' arch/arm64/configs/surya_defconfig
-printf '\nCONFIG_KSU_SUSFS=y\nCONFIG_KSU_SUSFS_SPOOF_UNAME=y\nCONFIG_KSU_SUSFS_SUS_MOUNT=y\nCONFIG_KSU_SUSFS_SUS_KSTAT=y\nCONFIG_KSU_SUSFS_SUS_PATH=y\n' >> arch/arm64/configs/surya_defconfig
+printf '\nCONFIG_KSU_SUSFS=y\nCONFIG_KSU_SUSFS_SPOOF_UNAME=y\nCONFIG_KSU_SUSFS_SUS_MOUNT=y\nCONFIG_KSU_SUSFS_SUS_KSTAT=y\nCONFIG_KSU_SUSFS_SUS_PATH=y\nCONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> arch/arm64/configs/surya_defconfig
 set +e
 make O="$ROOT/output/susfs-enabled-obj" ARCH=arm64 surya_defconfig > "$ROOT/output/susfs-enabled-config.log" 2>&1
 ENABLED_RC=$?
