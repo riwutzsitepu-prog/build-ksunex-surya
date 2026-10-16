@@ -398,6 +398,9 @@ set -e
     echo 'Experimental image built; NOT FLASHABLE; no DTB or boot validation.'
   else
     echo 'First compiler/linker failures:'
-    grep -m 15 -E '(fatal error:|error:|undefined reference|No rule to make target|Error [0-9])' "$ROOT/output/susfs-full-link.log" || tail -n 25 "$ROOT/output/susfs-full-link.log"
+    echo '===== FIRST RELEVANT BUILD ERROR WITH CONTEXT ====='
+    grep -n -m 8 -B 12 -A 18 -E '(fatal error:|error:|undefined reference|No rule to make target|Error [0-9])' "$ROOT/output/susfs-full-link.log" || true
+    echo '===== LAST 100 BUILD LINES ====='
+    tail -n 100 "$ROOT/output/susfs-full-link.log"
   fi
 } | tee "$ROOT/output/susfs-full-link-status.txt"
