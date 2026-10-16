@@ -297,3 +297,18 @@ else
   tail -n 35 "$ROOT/output/susfs-config-test.log"
 fi
 echo 'CONFIG TEST ONLY. SUSFS NOT ENABLED OR BOOT TESTED.' >> "$ROOT/output/susfs-config-test-status.txt"
+
+# Second isolated Kconfig pass with SUSFS selected, and a compile preflight.
+# This does not alter the primary kernel build or produce a flashable image.
+cd "$ROOT/riwutos11-susfs-probe"
+sed -i '/^# CONFIG_KSU_SUSFS is not set/d' arch/arm64/configs/surya_defconfig
+printf '\nCONFIG_KSU_SUSFS=y\n' >> arch/arm64/configs/surya_defconfig
+set +e
+make O="$ROOT/output/susfs-enabled-obj" ARCH=arm64 surya_defconfig > "$ROOT/output/susfs-enabled-config.log" 2>&1
+ENABLED_RC=$?
+set -e
+printf 'SUSFS enabled config result: %s\n' "$ENABLED_RC" | tee "$ROOT/output/susfs-enabled-status.txt"
+if [ "$ENABLED_RC" -eq 0 ]; then
+  grep -E '^CONFIG_KSU=|^CONFIG_KSU_SUSFS=|^# CONFIG_KSU_SUSFS' "$ROOT/output/susfs-enabled-obj/.config" | tee -a "$ROOT/output/susfs-enabled-status.txt" || true
+fi
+echo 'Configuration validation only, not compiled or boot-tested.' >> "$ROOT/output/susfs-enabled-status.txt"
