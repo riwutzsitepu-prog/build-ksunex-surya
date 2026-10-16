@@ -144,7 +144,7 @@ cat "$ROOT/output/susfs-diff-check-after-cleanup.txt"
 python3 - <<'PY'
 from pathlib import Path
 out=Path('../output/susfs-kconfig-audit.txt')
-source=Path('../../output/susfs-ksu-backport.patch')
+source=Path('../output/susfs-ksu-backport.patch')
 import urllib.request
 url='https://raw.githubusercontent.com/devnoname120/susfs4ksu-toco/kernel-4.14-backport/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch'
 source.write_bytes(urllib.request.urlopen(url,timeout=45).read())
