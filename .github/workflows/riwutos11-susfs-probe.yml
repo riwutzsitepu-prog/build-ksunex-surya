@@ -33,4 +33,5 @@ jobs:
             output/susfs-kconfig-audit.txt
             output/susfs-ksu-compat.log
             output/susfs-ksu-compat-status.txt
+            output/susfs-ksu-layout-map.txt
             output/susfs-partial-rejects/
