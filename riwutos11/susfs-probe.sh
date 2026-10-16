@@ -407,6 +407,23 @@ p.write_text(s)
 print('Isolated manual reboot hook installed; other hooks still unverified')
 PY
 
+# Reuse Linux 4.14 legacy unmount compatibility from the successful base build.
+# Do not create fake domain-check implementations for SUSFS unresolved symbols.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('drivers/kernelsu/feature/kernel_umount.c')
+s=p.read_text()
+old='defined(KSU_HAS_PATH_UMOUNT)\nextern int path_umount'
+new='(defined(KSU_HAS_PATH_UMOUNT) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0))\nextern int path_umount'
+assert s.count(old)==1, 'KernelSU unmount source changed; manual review needed'
+s=s.replace(old,new,1)
+old_include='#ifndef KSU_HAS_PATH_UMOUNT\n#include <linux/syscalls.h>\n#endif'
+assert old_include in s, 'KernelSU syscalls include structure changed'
+s=s.replace(old_include,'#include <linux/syscalls.h>',1)
+p.write_text(s)
+print('Applied previously validated Linux 4.14 unmount source compatibility')
+PY
+
 # Isolated full link attempt: test build wiring, not a flashable image.
 # Existing primary diagnostic kernel source and artifacts remain unchanged.
 cd "$ROOT/riwutos11-susfs-probe"
