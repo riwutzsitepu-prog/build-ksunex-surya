@@ -215,3 +215,24 @@ with (outdir/'susfs-ksu-relocation-map.txt').open('w') as out:
     print('These paths are candidates only, not API-compatible patch targets.',file=out)
 print((outdir/'susfs-ksu-relocation-map.txt').read_text())
 PY
+
+# Audit relocated interfaces in actual KernelSU Next files; do not apply old patch blindly.
+python3 - <<'PY'
+from pathlib import Path
+import os,re
+outdir=Path(os.environ['SUSFS_PROBE_ROOT'])/'output'
+needles={'policy/allowlist.c':['is_uid_allowed','allowlist'],
+'feature/sucompat.c':['ksu_handle_execve','ksu_handle_faccessat'],
+'runtime/ksud_integration.c':['ksud','boot'],
+'hook/hook_manager.c':['ksu_handle_setresuid','syscall'],
+'core/init.c':['ksu','init'],
+'selinux/selinux.c':['susfs','selinux']}
+with (outdir/'susfs-ksu-api-audit.txt').open('w') as out:
+    for filename,terms in needles.items():
+        source=Path(filename).read_text()
+        print(filename,file=out)
+        for term in terms:
+            print(f'  {term}: {len(re.findall(re.escape(term),source))} occurrences',file=out)
+    print('STATIC INSPECTION ONLY; SUSFS NOT COMPILED OR ENABLED',file=out)
+print((outdir/'susfs-ksu-api-audit.txt').read_text())
+PY
