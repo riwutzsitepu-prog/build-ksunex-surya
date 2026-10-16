@@ -180,12 +180,12 @@ outdir=Path(os.environ['SUSFS_PROBE_ROOT'])/'output'
 patch=(outdir/'susfs-ksu-backport.patch').read_text()
 target=Path('.')
 paths=re.findall(r'^diff --git a/(\S+) b/',patch,re.M)
-with outdir/'susfs-ksu-layout-map.txt'.open('w') as out:
+with (outdir/'susfs-ksu-layout-map.txt').open('w') as out:
     for p in paths:
         # kernel/ is the upstream patch root, while this checkout is already at kernel/
         rel=p.removeprefix('kernel/')
         exists=(target/rel).exists()
         print(f'{rel}: {"PRESENT" if exists else "MISSING"}',file=out)
     print('Old KernelSU patch is not applied to KernelSU Next.',file=out)
-print(outdir/'susfs-ksu-layout-map.txt'.read_text())
+print((outdir/'susfs-ksu-layout-map.txt').read_text())
 PY
