@@ -113,4 +113,11 @@ grep -q 'susfs_' fs/susfs.c
 grep -q 'susfs_' include/linux/susfs.h
 printf 'Core SUSFS files present; compile/integration NOT YET TESTED\\n' > "$ROOT/output/susfs-core-status.txt"
 wc -c fs/susfs.c include/linux/susfs.h | tee -a "$ROOT/output/susfs-core-status.txt"
+# Rejected patch diagnostic can leave malformed/whitespace contexts; capture instead of aborting.
+set +e
 git diff --check > "$ROOT/output/susfs-diff-check.txt" 2>&1
+DIFF_RC=$?
+set -e
+printf 'git diff --check exit code: %s\\n' "$DIFF_RC" >> "$ROOT/output/susfs-core-status.txt"
+cat "$ROOT/output/susfs-diff-check.txt"
+echo 'Source acquisition verified; not yet a compiled SUSFS kernel.'
