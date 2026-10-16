@@ -100,7 +100,7 @@ cp "$IMG" "$OUT/Image.gz"
 sha256sum "$OUT/Image.gz" > "$OUT/sha256.txt"
 # Build device trees separately, without replacing a known-good boot partition.
 # Build the confirmed base DTB independently; device overlays remain unvalidated.
-make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip arch/arm64/boot/dts/qcom/sdmmagpie.dtb
+make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip qcom/sdmmagpie.dtb
 mkdir -p "$OUT/dtb"
 find "$OUT/obj/arch/arm64/boot/dts" -type f -name '*.dtb' -exec cp --parents {} "$OUT/dtb/" \;
 DTB_COUNT=$(find "$OUT/dtb" -type f -name '*.dtb' | wc -l)
