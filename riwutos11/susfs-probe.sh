@@ -189,3 +189,29 @@ with (outdir/'susfs-ksu-layout-map.txt').open('w') as out:
     print('Old KernelSU patch is not applied to KernelSU Next.',file=out)
 print((outdir/'susfs-ksu-layout-map.txt').read_text())
 PY
+
+# Resolve relocated KernelSU Next subsystems, avoiding a blind legacy patch.
+python3 - <<'PY'
+from pathlib import Path
+import os
+outdir=Path(os.environ['SUSFS_PROBE_ROOT'])/'output'
+mappings={
+ 'allowlist.c':'policy/allowlist.c',
+ 'apk_sign.c':'manager/apk_sign.c',
+ 'apk_sign.h':'manager/apk_sign.h',
+ 'kernel_compat.c':'compat/kernel_compat.c',
+ 'kernel_compat.h':'compat/kernel_compat.h',
+ 'ksud.c':'runtime/ksud_integration.c',
+ 'manager.h':'manager/apk_sign.h',
+ 'sucompat.c':'feature/sucompat.c',
+ 'throne_tracker.c':'manager/throne_tracker.c',
+ 'throne_tracker.h':'manager/throne_tracker.h',
+ 'core_hook.c':'hook/hook_manager.c',
+ 'ksu.c':'core/init.c',
+}
+with (outdir/'susfs-ksu-relocation-map.txt').open('w') as out:
+    for old,new in mappings.items():
+        print(f'{old} -> {new}: {"EXISTS" if Path(new).is_file() else "MISSING"}',file=out)
+    print('These paths are candidates only, not API-compatible patch targets.',file=out)
+print((outdir/'susfs-ksu-relocation-map.txt').read_text())
+PY
