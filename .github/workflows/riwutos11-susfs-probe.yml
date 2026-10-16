@@ -30,4 +30,7 @@ jobs:
             output/susfs-core-status.txt
             output/susfs-diff-check.txt
             output/susfs-diff-check-after-cleanup.txt
+            output/susfs-kconfig-audit.txt
+            output/susfs-ksu-compat.log
+            output/susfs-ksu-compat-status.txt
             output/susfs-partial-rejects/
