@@ -263,3 +263,37 @@ out=Path(os.environ['SUSFS_PROBE_ROOT'])/'output'/'susfs-ksu-kconfig-stage.txt'
 out.write_text('KSU_SUSFS Kconfig entry staged in disposable KernelSU clone; default n; no SUSFS integration or boot validation.\n')
 print(out.read_text())
 PY
+
+# Validate the staged SUSFS option using the kernel's real Kconfig parser.
+# This remains a disposable source tree, and SUSFS is not enabled for boot.
+cp -a "$ROOT/riwutos11-ksunext-probe/kernel" "$ROOT/riwutos11-susfs-probe/drivers/kernelsu" 2>/dev/null || true
+cd "$ROOT/riwutos11-susfs-probe"
+python3 - <<'PY'
+from pathlib import Path
+p=Path('drivers/Kconfig')
+s=p.read_text()
+line='source "drivers/kernelsu/Kconfig"'
+if line not in s:
+    s+='\n'+line+'\n'
+    p.write_text(s)
+p=Path('drivers/Makefile')
+s=p.read_text()
+line='obj-$(CONFIG_KSU) += kernelsu/'
+if line not in s:
+    s+='\n'+line+'\n'
+    p.write_text(s)
+p=Path('arch/arm64/configs/surya_defconfig')
+s=p.read_text()+'\nCONFIG_KSU=y\n# CONFIG_KSU_SUSFS is not set\n'
+p.write_text(s)
+PY
+set +e
+make O="$ROOT/output/susfs-config-obj" ARCH=arm64 surya_defconfig > "$ROOT/output/susfs-config-test.log" 2>&1
+CFG_RC=$?
+set -e
+echo "KernelSU/SUSFS Kconfig parser exit code: $CFG_RC" | tee "$ROOT/output/susfs-config-test-status.txt"
+if [ "$CFG_RC" -eq 0 ]; then
+  grep -E '^CONFIG_KSU=|^# CONFIG_KSU_SUSFS' "$ROOT/output/susfs-config-obj/.config" | tee -a "$ROOT/output/susfs-config-test-status.txt" || true
+else
+  tail -n 35 "$ROOT/output/susfs-config-test.log"
+fi
+echo 'CONFIG TEST ONLY. SUSFS NOT ENABLED OR BOOT TESTED.' >> "$ROOT/output/susfs-config-test-status.txt"
