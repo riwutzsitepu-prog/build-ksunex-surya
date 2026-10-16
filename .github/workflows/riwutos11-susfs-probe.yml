@@ -77,4 +77,6 @@ jobs:
             output/susfs-link-preflight-status.txt
             output/susfs-object-content-audit.txt
             output/susfs-integrity.txt
+            output/susfs-full-link.log
+            output/susfs-full-link-status.txt
             output/susfs-partial-rejects/
