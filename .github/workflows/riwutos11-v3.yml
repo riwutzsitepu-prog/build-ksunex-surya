@@ -37,6 +37,32 @@ jobs:
           gzip -t output/Image.gz
           sha256sum -c output/sha256.txt
           echo 'PASS: Base kernel image is a verified diagnostic artifact only.'
+      - name: Publish integration blockers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          lines=Path('output/readiness-audit.txt').read_text().splitlines()
+          checks={}
+          for line in lines:
+              if ': ' in line:
+                  key,value=line.split(': ',1)
+                  checks[key]=value
+          blockers={
+              'manual_execve_sucompat_hook':'KernelSU manual execve integration missing',
+              'manual_execveat_sucompat_hook':'KernelSU manual execveat integration missing',
+              'susfs_source':'SUSFS source is absent from primary kernel build',
+          }
+          outstanding=[message for key,message in blockers.items() if checks.get(key)!='True']
+          report=['RIWUTOS11 INTEGRATION GAP REPORT','Kernel image: diagnostic only']
+          report.extend(f'- {item}' for item in outstanding)
+          report.append('- Full kernel linking with SUSFS: not tested')
+          report.append('- Boot validation on surya: not tested')
+          report.append('- OrangeFox flashable ZIP: not available')
+          Path('output/integration-gaps.txt').write_text('\n'.join(report)+'\n')
+          print('\n'.join(report))
+          PY
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -50,4 +76,5 @@ jobs:
             output/Image.gz
             output/sha256.txt
             output/readiness-audit.txt
+            output/integration-gaps.txt
           if-no-files-found: warn
