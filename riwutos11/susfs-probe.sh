@@ -309,7 +309,7 @@ if line not in s:
     s+='\n'+line+'\n'
     p.write_text(s)
 p=Path('arch/arm64/configs/surya_defconfig')
-s=p.read_text()+'\nCONFIG_KSU=y\n# CONFIG_KSU_SUSFS is not set\n'
+s=p.read_text()+'\nCONFIG_KSU=y\nCONFIG_KSU_MANUAL_HOOK=y\n# CONFIG_KSU_SUSFS is not set\n'
 p.write_text(s)
 PY
 set +e
