@@ -33,7 +33,16 @@ jobs:
           file "$object" | tee output/susfs-integrity.txt
           readelf -h "$object" | grep -E 'Class:|Machine:|Type:' | tee -a output/susfs-integrity.txt
           readelf -h "$object" | grep -q 'AArch64'
-          llvm-nm --defined-only "$object" | grep -q 'susfs_init'
+          for symbol in susfs_init susfs_set_uname susfs_spoof_uname susfs_add_sus_mount susfs_add_sus_kstat susfs_add_sus_path susfs_add_open_redirect; do
+            if ! llvm-nm --defined-only --extern-only "$object" | awk '{print $3}' | grep -Fxq "$symbol"; then
+              echo "MISSING REQUIRED SYMBOL: $symbol" | tee -a output/susfs-integrity.txt
+              exit 1
+            fi
+            echo "Verified symbol: $symbol" >> output/susfs-integrity.txt
+          done
+          for feature in KSU_SUSFS KSU_SUSFS_SPOOF_UNAME KSU_SUSFS_SUS_MOUNT KSU_SUSFS_SUS_KSTAT KSU_SUSFS_SUS_PATH KSU_SUSFS_OPEN_REDIRECT; do
+            grep -Fxq "CONFIG_${feature}=y" output/susfs-enabled-obj/.config || { echo "Missing enabled config: $feature"; exit 1; }
+          done
           sha256sum "$object" | tee -a output/susfs-integrity.txt
           echo 'PASS: AArch64 SUSFS object present and nonempty; kernel linking and boot remain unverified.' | tee -a output/susfs-integrity.txt
       - name: Publish findings
