@@ -1,10 +1,6 @@
 name: RiwutOS11 SUSFS compatibility probe
+# Legacy SUSFS experiment is retired. Manual dispatch only; not part of kernel target.
 on:
-  push:
-    branches: [riwutos11-v3-diagnostic]
-    paths:
-      - 'riwutos11/susfs-probe.sh'
-      - '.github/workflows/riwutos11-susfs-probe.yml'
   workflow_dispatch:
 permissions:
   contents: read
