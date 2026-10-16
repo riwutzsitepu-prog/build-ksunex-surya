@@ -29,4 +29,5 @@ jobs:
             output/susfs-partial-status.txt
             output/susfs-core-status.txt
             output/susfs-diff-check.txt
+            output/susfs-diff-check-after-cleanup.txt
             output/susfs-partial-rejects/
