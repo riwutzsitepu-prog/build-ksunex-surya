@@ -45,6 +45,19 @@ jobs:
           done
           sha256sum "$object" | tee -a output/susfs-integrity.txt
           echo 'PASS: AArch64 SUSFS object present and nonempty; kernel linking and boot remain unverified.' | tee -a output/susfs-integrity.txt
+      - name: Enforce full kernel link result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -s output/susfs-full-link-status.txt
+          cat output/susfs-full-link-status.txt
+          if ! grep -Fxq 'Full kernel build/link exit code: 0' output/susfs-full-link-status.txt; then
+            echo 'FAIL: Full kernel linking is incomplete; object compile is not sufficient.' >&2
+            exit 1
+          fi
+          test -s output/susfs-enabled-obj/arch/arm64/boot/Image.gz
+          gzip -t output/susfs-enabled-obj/arch/arm64/boot/Image.gz
+          echo 'PASS: experimental Image.gz linked; not boot-tested or flashable.'
       - name: Publish findings
         if: always()
         uses: actions/upload-artifact@v4
