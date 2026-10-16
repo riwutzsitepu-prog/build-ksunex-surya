@@ -168,3 +168,20 @@ set -e
 echo "KernelSU Next legacy SUSFS patch compatibility exit code: $KSU_PATCH_RC" | tee "$ROOT/output/susfs-ksu-compat-status.txt"
 cat "$ROOT/output/susfs-ksu-compat.log"
 echo "PROBE ONLY: no KernelSU integration or boot validation" >> "$ROOT/output/susfs-ksu-compat-status.txt"
+
+# Analyze patch layout versus KernelSU Next without applying incompatible old KernelSU code.
+python3 - <<'PY'
+from pathlib import Path
+import re
+patch=Path('../output/susfs-ksu-backport.patch').read_text()
+target=Path('.')
+paths=re.findall(r'^diff --git a/(\S+) b/',patch,re.M)
+with Path('../output/susfs-ksu-layout-map.txt').open('w') as out:
+    for p in paths:
+        # kernel/ is the upstream patch root, while this checkout is already at kernel/
+        rel=p.removeprefix('kernel/')
+        exists=(target/rel).exists()
+        print(f'{rel}: {"PRESENT" if exists else "MISSING"}',file=out)
+    print('Old KernelSU patch is not applied to KernelSU Next.',file=out)
+print(Path('../output/susfs-ksu-layout-map.txt').read_text())
+PY
