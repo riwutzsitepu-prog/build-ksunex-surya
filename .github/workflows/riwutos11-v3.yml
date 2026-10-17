@@ -130,6 +130,7 @@ jobs:
             output/handoff-manifest.json
             output/dtb/
             output/ksu-link-audit.txt
+            output/ksu-initcall-audit.txt
             output/readiness-audit.txt
             output/integration-gaps.txt
           if-no-files-found: warn
