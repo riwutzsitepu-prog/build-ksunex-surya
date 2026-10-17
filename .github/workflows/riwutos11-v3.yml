@@ -85,23 +85,23 @@ jobs:
               if ': ' in line:
                   key,value=line.split(': ',1)
                   checks[key]=value
-          blockers={
-              'manual_execve_sucompat_hook':'KernelSU manual execve integration missing',
-              'manual_execveat_sucompat_hook':'KernelSU manual execveat integration missing',
-              'susfs_source':'SUSFS source is absent from primary kernel build',
-          }
-          outstanding=[message for key,message in blockers.items() if checks.get(key)!='True']
-          report=['RIWUTOS11 INTEGRATION GAP REPORT','Kernel image: diagnostic only']
+          outstanding=[
+              'Manual KernelSU execve/execveat runtime hooks have not been verified',
+              'DTBO compatibility with target ROM has not been verified',
+              'Boot image repacking against target ROM has not been verified',
+              'Boot validation on surya has not been performed',
+              'OrangeFox flashable ZIP is not available',
+          ]
+          report=['RIWUTOS11 RELEASE READINESS REPORT',
+                  'Kernel variant: 4.14.355 without SUSFS',
+                  'Image.gz and base DTB: build/format validation only']
           report.extend(f'- {item}' for item in outstanding)
-          report.append('- Full kernel linking with SUSFS: not tested')
-          report.append('- Boot validation on surya: not tested')
-          report.append('- OrangeFox flashable ZIP: not available')
           Path('output/integration-gaps.txt').write_text('\n'.join(report)+'\n')
           print('\n'.join(report))
           summary=Path(__import__('os').environ.get('GITHUB_STEP_SUMMARY','output/integration-summary.md'))
-          summary.write_text('## RiwutOS11 — Diagnostic build only\n\n'
+          summary.write_text('## RiwutOS11 — No SUSFS diagnostic build\n\n'
                              + '\n'.join('- '+item for item in outstanding)
-                             + '\n\n**Not flashable:** full integration, linking, and boot validation are outstanding.\n')
+                             + '\n\n**Not flashable:** target-ROM DTBO, boot image and on-device compatibility remain unverified.\n')
           PY
       - name: Upload build diagnostics
         if: always()
