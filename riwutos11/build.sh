@@ -148,6 +148,22 @@ checks['CONFIG_KSU_MANUAL_HOOK']='CONFIG_KSU_MANUAL_HOOK=y' in cfg
     'KernelSU manager detection on device: REPORTED NOT INTEGRATED\n')
 print((out/'ksu-link-audit.txt').read_text())
 PY
+# KernelSU initialization evidence from linked image, rather than Kconfig alone.
+python3 - <<'PY'
+from pathlib import Path
+out=Path('../output')
+syms=(out/'obj/System.map').read_text().splitlines()
+found={line.split()[-1] for line in syms if len(line.split())>=3}
+initcalls=sorted(x for x in found if 'kernelsu_init' in x or 'ksu_init' in x)
+report=['KernelSU initialization evidence (offline only)',
+        'kernelsu_init present: '+str('kernelsu_init' in found),
+        'matching initcall symbols: '+(', '.join(initcalls) if initcalls else 'NONE'),
+        'initcall linked runtime: NOT TESTED',
+        'manager handshake: REPORTED UNSUPPORTED ON DEVICE',
+        'su availability: REPORTED MISSING ON DEVICE']
+(out/'ksu-initcall-audit.txt').write_text('\n'.join(report)+'\n')
+print('\n'.join(report))
+PY
 # Static readiness audit, independent of compilation success.
 python3 - <<'PY'
 from pathlib import Path
