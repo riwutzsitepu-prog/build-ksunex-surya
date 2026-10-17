@@ -72,6 +72,16 @@ jobs:
           assert expected in recorded, 'Kernel source pin does not match expected commit'
           print('PASS: Pinned surya source commit recorded')
           PY
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path('output/handoff-manifest.json').read_text())
+          assert m['ready_to_flash'] is False
+          assert m['boot_img']=='NOT PROVIDED'
+          assert m['dtbo_img']=='NOT VERIFIED'
+          assert len(m['base_dtbs'])==1
+          print('PASS: No-SUSFS handoff manifest and flash safety gate')
+          PY
           echo 'PASS: Base kernel image is a verified diagnostic artifact only.'
       - name: Publish integration blockers
         shell: bash
@@ -117,6 +127,7 @@ jobs:
             output/sha256.txt
             output/dtb-status.txt
             output/dtb-sha256.txt
+            output/handoff-manifest.json
             output/dtb/
             output/readiness-audit.txt
             output/integration-gaps.txt
