@@ -108,6 +108,31 @@ test "$DTB_COUNT" -gt 0 || { echo "No compiled DTBs found" >&2; exit 7; }
 printf 'Base DTB files built: %s (overlay DTBO not validated)\n' "$DTB_COUNT" > "$OUT/dtb-status.txt"
 find "$OUT/dtb" -type f -name '*.dtb' -print0 | sort -z | xargs -0 sha256sum > "$OUT/dtb-sha256.txt"
 
+# Produce a ROM-independent handoff manifest. No boot partition is modified.
+python3 - <<'PY'
+from pathlib import Path
+import hashlib,json
+out=Path('../output')
+config=(out/'obj/.config').read_text()
+assert '# CONFIG_KSU_SUSFS is not set' in config or 'CONFIG_KSU_SUSFS=' not in config, 'SUSFS unexpectedly enabled'
+dtbs=sorted((out/'dtb').rglob('*.dtb'))
+assert len(dtbs)==1 and dtbs[0].name=='sdmmagpie.dtb', 'Unexpected DTB set'
+def entry(p):
+    return {'path':str(p.relative_to(out)), 'bytes':p.stat().st_size,
+            'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}
+manifest={
+ 'variant':'RiwutOS11 4.14.355 / Poco X3 NFC surya / no SUSFS',
+ 'source_commit':(out/'source-commit.txt').read_text().strip(),
+ 'kernel':entry(out/'Image.gz'),
+ 'base_dtbs':[entry(p) for p in dtbs],
+ 'boot_img':'NOT PROVIDED',
+ 'dtbo_img':'NOT VERIFIED',
+ 'kernel_su_runtime':'NOT TESTED',
+ 'ready_to_flash':False
+}
+(out/'handoff-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+print('Handoff manifest created: NOT FLASHABLE')
+PY
 # Static readiness audit, independent of compilation success.
 python3 - <<'PY'
 from pathlib import Path
