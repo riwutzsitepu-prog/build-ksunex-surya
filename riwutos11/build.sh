@@ -133,6 +133,21 @@ manifest={
 (out/'handoff-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print('Handoff manifest created: NOT FLASHABLE')
 PY
+# Verify linked KernelSU core symbols, not only CONFIG_KSU in defconfig.
+python3 - <<'PY'
+from pathlib import Path
+out=Path('../output')
+sym=(out/'obj/System.map').read_text()
+cfg=(out/'obj/.config').read_text()
+symbols=('kernelsu_init','ksu_handle_sys_reboot','ksu_handle_setresuid')
+checks={name:any(line.split()[-1]==name for line in sym.splitlines() if line.split()) for name in symbols}
+checks['CONFIG_KSU_builtin']='CONFIG_KSU=y' in cfg
+checks['CONFIG_KSU_MANUAL_HOOK']='CONFIG_KSU_MANUAL_HOOK=y' in cfg
+(out/'ksu-link-audit.txt').write_text('KernelSU linked-symbol diagnostic (not a runtime test)\n'+
+    ''.join(f'{k}: {v}\n' for k,v in checks.items())+
+    'KernelSU manager detection on device: REPORTED NOT INTEGRATED\n')
+print((out/'ksu-link-audit.txt').read_text())
+PY
 # Static readiness audit, independent of compilation success.
 python3 - <<'PY'
 from pathlib import Path
