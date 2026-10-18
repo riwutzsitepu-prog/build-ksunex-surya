@@ -67,6 +67,29 @@ s=s.replace('SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)',
 p.write_text(s)
 print('KernelSU setresuid manual hook installed')
 PY
+# Manual execveat hook for legacy 4.14. Both execve and execveat converge here.
+# Preserve the previously bootable kernel sources except for this guarded call.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('fs/exec.c')
+s=p.read_text()
+signature='do_execveat_common(int fd, struct filename *filename,'
+assert s.count(signature)==1, 'Unexpected do_execveat_common signature'
+assert 'ksu_handle_execveat(' not in s, 'KernelSU execveat hook already present'
+prototype='#ifdef CONFIG_KSU\nextern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n#endif\n'
+s=s.replace(signature,prototype+signature,1)
+start=s.index(signature)
+anchor='\tif (IS_ERR(filename))\n\t\treturn PTR_ERR(filename);\n'
+idx=s.index(anchor,start)
+s=s[:idx+len(anchor)]+'''
+#ifdef CONFIG_KSU
+\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);
+#endif
+'''+s[idx+len(anchor):]
+assert s.count('ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);')==1
+p.write_text(s)
+print('KernelSU legacy 4.14 execve/execveat common path hook installed')
+PY
 # Linux 4.14 XRadens does not export path_umount. Use the legacy sys_umount path.
 python3 - <<'PY'
 from pathlib import Path
@@ -173,8 +196,8 @@ reboot=Path('kernel/reboot.c').read_text()
 checks={
   'manual_reboot_hook': 'ksu_handle_sys_reboot(magic1, magic2, cmd, &arg)' in reboot,
   'manual_setresuid_hook': 'ksu_handle_setresuid(ksu_old_uid, ksu_new_uid)' in uid,
-  'manual_execve_sucompat_hook': 'ksu_handle_execve' in src,
-  'manual_execveat_sucompat_hook': 'ksu_handle_execveat_sucompat' in src,
+  'manual_execve_sucompat_hook': 'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' in src,
+  'manual_execveat_sucompat_hook': 'ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);' in src,
   'susfs_source': Path('fs/susfs.c').exists(),
 }
 out=Path('../output/readiness-audit.txt')
