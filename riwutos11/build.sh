@@ -77,7 +77,7 @@ signature='do_execveat_common(int fd, struct filename *filename,'
 assert s.count(signature)==1, 'Unexpected do_execveat_common signature'
 assert 'ksu_handle_execveat(' not in s, 'KernelSU execveat hook already present'
 prototype='#ifdef CONFIG_KSU\nextern int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n#endif\n'
-s=s.replace(signature,prototype+signature,1)
+assert s.count('static int '+signature)==1, 'Unexpected static function declaration'\ns=s.replace('static int '+signature,prototype+'static int '+signature,1)
 start=s.index(signature)
 anchor='\tif (IS_ERR(filename))\n\t\treturn PTR_ERR(filename);\n'
 idx=s.index(anchor,start)
