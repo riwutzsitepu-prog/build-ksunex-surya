@@ -91,6 +91,19 @@ assert s.count('ksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);')==1
 p.write_text(s)
 print('KernelSU legacy 4.14 execve/execveat common path hook installed')
 PY
+# KernelSU legacy 4.14: use slab allocation and expose kallsyms name limit.
+python3 - <<'PY'
+from pathlib import Path
+p=Path('drivers/kernelsu/supercall/dispatch.c')
+s=p.read_text()
+assert s.count('kvcalloc(')==2 and s.count('kvfree(')==2, 'Unexpected allocation paths'
+s=s.replace('kvcalloc(', 'kcalloc(').replace('kvfree(', 'kfree(')
+needle='#include <linux/slab.h>'
+assert s.count(needle)==1
+s=s.replace(needle,needle+'\n#include <linux/kallsyms.h>',1)
+p.write_text(s)
+print('KernelSU 4.14 slab and kallsyms compatibility installed')
+PY
 # Linux 4.14 XRadens does not export path_umount. Use the legacy sys_umount path.
 python3 - <<'PY'
 from pathlib import Path
