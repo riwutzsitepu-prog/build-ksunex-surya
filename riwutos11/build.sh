@@ -24,6 +24,7 @@ CONFIG_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 CONFIG_KSU=y
 CONFIG_KSU_MANUAL_HOOK=y
+CONFIG_SDCARD_FS=y
 CONFIG
 curl -fL --retry 3 -o "$OUT/ksu-setup.sh" https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh
 bash "$OUT/ksu-setup.sh" legacy
@@ -124,7 +125,7 @@ export ARCH=arm64 SUBARCH=arm64 KBUILD_BUILD_USER=riwut KBUILD_BUILD_HOST=RiwutO
 export CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabihf-
 make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip surya_defconfig
 make O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip olddefconfig
-for k in CONFIG_KSU CONFIG_KSU_MANUAL_HOOK; do
+for k in CONFIG_KSU CONFIG_KSU_MANUAL_HOOK CONFIG_SDCARD_FS CONFIG_CONFIGFS_FS; do
   grep -qx "$k=y" "$OUT/obj/.config" || { echo "Missing $k" >&2; exit 4; }
 done
 make -j2 O="$OUT/obj" CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip Image.gz
